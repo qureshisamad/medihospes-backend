@@ -14,7 +14,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.user import JobTitle
 
 
 class ShiftType(str, enum.Enum):
@@ -30,7 +29,7 @@ class Shift(Base):
     clinic_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("clinics.id"), index=True
     )
-    required_role: Mapped[JobTitle] = mapped_column(Enum(JobTitle))
+    required_role: Mapped[str] = mapped_column(String(100))
     shift_type: Mapped[ShiftType] = mapped_column(Enum(ShiftType))
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))

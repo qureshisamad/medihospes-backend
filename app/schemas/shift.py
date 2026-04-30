@@ -6,12 +6,11 @@ from enum import Enum
 from pydantic import BaseModel, model_validator
 
 from app.models.shift import ShiftType
-from app.models.user import JobTitle
 
 
 class ShiftCreate(BaseModel):
     clinic_id: int
-    required_role: JobTitle
+    required_role: str
     shift_type: ShiftType
     start_time: datetime
     end_time: datetime
@@ -47,7 +46,7 @@ class ShiftRead(BaseModel):
     id: int
     clinic_id: int
     clinic_name: str | None = None
-    required_role: JobTitle
+    required_role: str
     shift_type: ShiftType
     start_time: datetime
     end_time: datetime
@@ -86,7 +85,7 @@ class BookingDetailRead(BaseModel):
     user_id: int
     first_name: str
     last_name: str
-    job_title: JobTitle
+    job_title: str
     status: str
     booked_at: datetime
     attendance_status: AttendanceStatus

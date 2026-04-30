@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, clinics, notifications, reports, shifts, time_entries
+from app.api import auth, clinics, job_titles, notifications, reports, shifts, time_entries, users
 from app.core.config import settings
 
 app = FastAPI(
@@ -29,6 +29,8 @@ app.include_router(shifts.router, prefix="/api")
 app.include_router(time_entries.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
+app.include_router(users.router, prefix="/api")
+app.include_router(job_titles.router, prefix="/api")
 
 
 @app.get("/api/health")

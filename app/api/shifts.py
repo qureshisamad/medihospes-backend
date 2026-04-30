@@ -12,7 +12,7 @@ from app.models.booking import BookingStatus, ShiftBooking
 from app.models.clinic import Clinic
 from app.models.shift import Shift, ShiftType
 from app.models.time_entry import TimeEntry
-from app.models.user import JobTitle, User, UserRole
+from app.models.user import User, UserRole
 from app.schemas.shift import (
     AttendanceStatus,
     BookingDetailRead,
@@ -60,7 +60,7 @@ def _enrich_shift(shift: Shift, db: Session) -> ShiftRead:
 @router.get("/", response_model=list[ShiftRead])
 def list_shifts(
     clinic_id: int | None = Query(None),
-    role: JobTitle | None = Query(None),
+    role: str | None = Query(None),
     shift_type: ShiftType | None = Query(None),
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
@@ -88,7 +88,7 @@ def calendar_shifts(
     date_from: datetime = Query(...),
     date_to: datetime = Query(...),
     clinic_id: int | None = Query(None),
-    role: JobTitle | None = Query(None),
+    role: str | None = Query(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):

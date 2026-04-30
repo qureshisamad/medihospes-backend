@@ -1,9 +1,10 @@
-"""Seed script — creates initial admin, staff users, and clinics."""
+"""Seed script — creates initial admin, staff users, clinics, and job titles."""
 
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.clinic import Clinic
-from app.models.user import ContractType, JobTitle, User, UserRole
+from app.models.job_title import JobTitleRecord
+from app.models.user import ContractType, User, UserRole
 
 # Import all models so SQLAlchemy can resolve relationships
 from app.models.shift import Shift  # noqa: F401
@@ -20,6 +21,16 @@ def seed():
         db.close()
         return
 
+    # Default job titles
+    job_titles = [
+        JobTitleRecord(name="administrative", label="Administrative"),
+        JobTitleRecord(name="nurse", label="Nurse"),
+        JobTitleRecord(name="doctor", label="Doctor"),
+        JobTitleRecord(name="technician", label="Technician"),
+        JobTitleRecord(name="support", label="Support"),
+    ]
+    db.add_all(job_titles)
+
     # Admin user
     admin = User(
         email="admin@medihospes.it",
@@ -27,7 +38,7 @@ def seed():
         first_name="Admin",
         last_name="Manager",
         role=UserRole.ADMIN,
-        job_title=JobTitle.ADMINISTRATIVE,
+        job_title="administrative",
         contract_type=ContractType.FULL_TIME,
         weekly_hour_limit=36.0,
     )
@@ -39,7 +50,7 @@ def seed():
         first_name="Maria",
         last_name="Rossi",
         role=UserRole.STAFF,
-        job_title=JobTitle.NURSE,
+        job_title="nurse",
         contract_type=ContractType.FULL_TIME,
         weekly_hour_limit=36.0,
     )
@@ -50,7 +61,7 @@ def seed():
         first_name="Luca",
         last_name="Bianchi",
         role=UserRole.STAFF,
-        job_title=JobTitle.TECHNICIAN,
+        job_title="technician",
         contract_type=ContractType.PART_TIME,
         weekly_hour_limit=20.0,
     )
@@ -71,6 +82,7 @@ def seed():
     print("  Tech login:   tech@medihospes.it  / staff123")
     print()
     print("  Clinics: Messina I (ME-I), Messina II (ME-II), Catania Centro (CT-I)")
+    print("  Job Titles: Administrative, Nurse, Doctor, Technician, Support")
 
 
 if __name__ == "__main__":

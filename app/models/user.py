@@ -15,14 +15,6 @@ class UserRole(str, enum.Enum):
     ADMIN = "admin"
 
 
-class JobTitle(str, enum.Enum):
-    ADMINISTRATIVE = "administrative"
-    NURSE = "nurse"
-    DOCTOR = "doctor"
-    TECHNICIAN = "technician"
-    SUPPORT = "support"
-
-
 class ContractType(str, enum.Enum):
     PART_TIME = "part_time"
     FULL_TIME = "full_time"
@@ -42,7 +34,7 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole), default=UserRole.STAFF
     )
-    job_title: Mapped[JobTitle] = mapped_column(Enum(JobTitle))
+    job_title: Mapped[str] = mapped_column(String(100))
     contract_type: Mapped[ContractType] = mapped_column(Enum(ContractType))
     weekly_hour_limit: Mapped[float] = mapped_column(
         Float, default=36.0, comment="Max contracted weekly hours"
