@@ -57,7 +57,7 @@ def _enrich_shift(shift: Shift, db: Session) -> ShiftRead:
     )
 
 
-@router.get("/", response_model=list[ShiftRead])
+@router.get("", response_model=list[ShiftRead])
 def list_shifts(
     clinic_id: int | None = Query(None),
     role: str | None = Query(None),
@@ -211,7 +211,7 @@ def shift_details(
     )
 
 
-@router.post("/", response_model=ShiftRead, status_code=201)
+@router.post("", response_model=ShiftRead, status_code=201)
 def publish_shift(
     body: ShiftCreate,
     db: Session = Depends(get_db),

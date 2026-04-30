@@ -12,7 +12,7 @@ from app.schemas.notification import NotificationRead
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
 
-@router.get("/", response_model=list[NotificationRead])
+@router.get("", response_model=list[NotificationRead])
 def list_notifications(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),

@@ -12,7 +12,7 @@ from app.schemas.job_title import JobTitleCreate, JobTitleRead, JobTitleUpdate
 router = APIRouter(prefix="/job-titles", tags=["Job Titles"])
 
 
-@router.get("/", response_model=list[JobTitleRead])
+@router.get("", response_model=list[JobTitleRead])
 def list_job_titles(
     is_active: bool | None = Query(None),
     db: Session = Depends(get_db),
@@ -25,7 +25,7 @@ def list_job_titles(
     return q.order_by(JobTitleRecord.label).all()
 
 
-@router.post("/", response_model=JobTitleRead, status_code=201)
+@router.post("", response_model=JobTitleRead, status_code=201)
 def create_job_title(
     body: JobTitleCreate,
     db: Session = Depends(get_db),

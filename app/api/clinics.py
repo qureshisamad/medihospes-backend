@@ -33,12 +33,12 @@ def _geocode(address: str) -> tuple[float | None, float | None]:
     return None, None
 
 
-@router.get("/", response_model=list[ClinicRead])
+@router.get("", response_model=list[ClinicRead])
 def list_clinics(db: Session = Depends(get_db)):
     return db.query(Clinic).order_by(Clinic.name).all()
 
 
-@router.post("/", response_model=ClinicRead, status_code=201)
+@router.post("", response_model=ClinicRead, status_code=201)
 def create_clinic(
     body: ClinicCreate,
     db: Session = Depends(get_db),
