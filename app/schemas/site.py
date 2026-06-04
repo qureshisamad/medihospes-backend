@@ -1,28 +1,24 @@
-"""Clinic request/response schemas."""
+"""Site schemas (v2 — reshaped from Clinic, no geolocation)."""
 
 from pydantic import BaseModel
 
 
-class ClinicCreate(BaseModel):
+class SiteCreate(BaseModel):
     name: str
     code: str
     address: str | None = None
 
 
-class ClinicUpdate(BaseModel):
+class SiteUpdate(BaseModel):
     name: str | None = None
     code: str | None = None
     address: str | None = None
-    latitude: float | None = None
-    longitude: float | None = None
 
 
-class ClinicRead(BaseModel):
+class SiteRead(BaseModel):
     id: int
     name: str
     code: str
     address: str | None
-    latitude: float | None
-    longitude: float | None
 
     model_config = {"from_attributes": True}

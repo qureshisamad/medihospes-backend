@@ -1,4 +1,4 @@
-"""Authentication endpoints — login and register."""
+"""Authentication endpoints — login and account bootstrap (Manager / HR)."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/register", response_model=UserRead, status_code=201)
 def register(body: UserCreate, db: Session = Depends(get_db)):
-    """Create a new user account."""
+    """Create a Manager/HR login account (used to bootstrap the install)."""
     if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
 
@@ -22,11 +22,7 @@ def register(body: UserCreate, db: Session = Depends(get_db)):
         hashed_password=hash_password(body.password),
         first_name=body.first_name,
         last_name=body.last_name,
-        codice_fiscale=body.codice_fiscale,
         role=body.role,
-        job_title=body.job_title,
-        contract_type=body.contract_type,
-        weekly_hour_limit=body.weekly_hour_limit,
     )
     db.add(user)
     db.commit()

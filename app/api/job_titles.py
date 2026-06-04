@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_edit
 from app.core.database import get_db
 from app.models.job_title import JobTitleRecord
 from app.models.user import User
@@ -29,7 +29,7 @@ def list_job_titles(
 def create_job_title(
     body: JobTitleCreate,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _admin: User = Depends(require_edit),
 ):
     """Create a new job title (admin only)."""
     existing = (
@@ -52,7 +52,7 @@ def update_job_title(
     job_title_id: int,
     body: JobTitleUpdate,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _admin: User = Depends(require_edit),
 ):
     """Update a job title (admin only)."""
     record = db.query(JobTitleRecord).filter(JobTitleRecord.id == job_title_id).first()
@@ -85,7 +85,7 @@ def update_job_title(
 def delete_job_title(
     job_title_id: int,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _admin: User = Depends(require_edit),
 ):
     """Delete a job title (admin only). Soft-deletes by deactivating."""
     record = db.query(JobTitleRecord).filter(JobTitleRecord.id == job_title_id).first()

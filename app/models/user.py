@@ -1,23 +1,26 @@
-"""User / Employee model."""
+"""User model — system login accounts (v2).
+
+v2.0 has exactly two access levels, both full-edit: Manager and HR
+(req v2.0 §1.2, §2.6, §4). Employees have NO access and are modelled separately
+in `Employee` — they are never User rows.
+
+(The "Administrative Operator" mentioned in the Q&A also edits the schedule;
+pending confirmation it is treated as an HR-level account rather than a third
+distinct permission tier — the Core Design Principles state only two levels.)
+"""
 
 import enum
 from datetime import datetime, timezone
-from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, DateTime, Enum, Integer, String
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
 
 class UserRole(str, enum.Enum):
-    STAFF = "staff"
-    ADMIN = "admin"
-
-
-class ContractType(str, enum.Enum):
-    PART_TIME = "part_time"
-    FULL_TIME = "full_time"
+    MANAGER = "manager"
+    HR = "hr"
 
 
 class User(Base):
@@ -28,24 +31,11 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255))
     first_name: Mapped[str] = mapped_column(String(100))
     last_name: Mapped[str] = mapped_column(String(100))
-    codice_fiscale: Mapped[Optional[str]] = mapped_column(
-        String(16), unique=True, nullable=True, index=True
-    )
     role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole), default=UserRole.STAFF
-    )
-    job_title: Mapped[str] = mapped_column(String(100))
-    contract_type: Mapped[ContractType] = mapped_column(Enum(ContractType))
-    weekly_hour_limit: Mapped[float] = mapped_column(
-        Float, default=36.0, comment="Max contracted weekly hours"
+        Enum(UserRole), default=UserRole.MANAGER
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
-
-    # Relationships
-    bookings = relationship("ShiftBooking", back_populates="user")
-    time_entries = relationship("TimeEntry", back_populates="user")
-    notifications = relationship("Notification", back_populates="user")

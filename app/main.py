@@ -7,7 +7,17 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.api import auth, clinics, job_titles, notifications, reports, shifts, time_entries, users
+from app.api import (
+    auth,
+    departments,
+    employees,
+    job_titles,
+    reports,
+    roster,
+    shift_types,
+    sites,
+    users,
+)
 from app.core.config import settings
 
 
@@ -43,13 +53,14 @@ app.add_middleware(
 
 # Register routers
 app.include_router(auth.router, prefix="/api")
-app.include_router(clinics.router, prefix="/api")
-app.include_router(shifts.router, prefix="/api")
-app.include_router(time_entries.router, prefix="/api")
-app.include_router(reports.router, prefix="/api")
-app.include_router(notifications.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
+app.include_router(departments.router, prefix="/api")
+app.include_router(sites.router, prefix="/api")
 app.include_router(job_titles.router, prefix="/api")
+app.include_router(shift_types.router, prefix="/api")
+app.include_router(employees.router, prefix="/api")
+app.include_router(roster.router, prefix="/api")
+app.include_router(reports.router, prefix="/api")
 
 
 @app.get("/api/health")

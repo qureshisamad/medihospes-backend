@@ -9,12 +9,7 @@ from app.core.config import settings
 from app.core.database import Base
 
 # Import all models so Alembic can detect them
-from app.models.user import User  # noqa: F401
-from app.models.clinic import Clinic  # noqa: F401
-from app.models.shift import Shift  # noqa: F401
-from app.models.booking import ShiftBooking  # noqa: F401
-from app.models.time_entry import TimeEntry  # noqa: F401
-from app.models.notification import Notification  # noqa: F401
+import app.models  # noqa: F401  (registers every v2 model)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

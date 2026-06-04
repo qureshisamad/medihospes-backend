@@ -1,22 +1,10 @@
-"""User request/response schemas."""
+"""User (login account) request/response schemas — Manager / HR only (v2)."""
 
 from datetime import datetime
 
 from pydantic import BaseModel, EmailStr
 
-from app.models.user import ContractType, UserRole
-
-
-class UserUpdate(BaseModel):
-    first_name: str | None = None
-    last_name: str | None = None
-    email: EmailStr | None = None
-    codice_fiscale: str | None = None
-    job_title: str | None = None
-    contract_type: ContractType | None = None
-    weekly_hour_limit: float | None = None
-    role: UserRole | None = None
-    is_active: bool | None = None
+from app.models.user import UserRole
 
 
 class UserCreate(BaseModel):
@@ -24,11 +12,16 @@ class UserCreate(BaseModel):
     password: str
     first_name: str
     last_name: str
-    codice_fiscale: str | None = None
-    job_title: str
-    contract_type: ContractType
-    weekly_hour_limit: float = 36.0
-    role: UserRole = UserRole.STAFF
+    role: UserRole = UserRole.MANAGER
+
+
+class UserUpdate(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    email: EmailStr | None = None
+    role: UserRole | None = None
+    is_active: bool | None = None
+    password: str | None = None
 
 
 class UserRead(BaseModel):
@@ -36,11 +29,7 @@ class UserRead(BaseModel):
     email: str
     first_name: str
     last_name: str
-    codice_fiscale: str | None
     role: UserRole
-    job_title: str
-    contract_type: ContractType
-    weekly_hour_limit: float
     is_active: bool
     created_at: datetime
 

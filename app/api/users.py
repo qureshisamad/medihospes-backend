@@ -1,25 +1,25 @@
-"""Admin user management endpoints."""
+"""Login-account management — Manager / HR accounts only (v2)."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin
+from app.api.deps import require_edit
 from app.core.database import get_db
 from app.core.security import hash_password
 from app.models.user import User
 from app.schemas.user import UserCreate, UserRead, UserUpdate
 
-router = APIRouter(prefix="/users", tags=["User Management"])
+router = APIRouter(prefix="/users", tags=["Account Management"])
 
 
 @router.get("", response_model=list[UserRead])
 def list_users(
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _user: User = Depends(require_edit),
     role: str | None = Query(None, description="Filter by role"),
     is_active: bool | None = Query(None, description="Filter by active status"),
 ):
-    """List all users (admin only)."""
+    """List Manager/HR accounts."""
     query = db.query(User)
     if role:
         query = query.filter(User.role == role)
@@ -32,9 +32,9 @@ def list_users(
 def create_user(
     body: UserCreate,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _user: User = Depends(require_edit),
 ):
-    """Create a new user (admin only)."""
+    """Create a new Manager/HR account."""
     if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
 
@@ -43,11 +43,7 @@ def create_user(
         hashed_password=hash_password(body.password),
         first_name=body.first_name,
         last_name=body.last_name,
-        codice_fiscale=body.codice_fiscale,
         role=body.role,
-        job_title=body.job_title,
-        contract_type=body.contract_type,
-        weekly_hour_limit=body.weekly_hour_limit,
     )
     db.add(user)
     db.commit()
@@ -59,9 +55,8 @@ def create_user(
 def get_user(
     user_id: int,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _user: User = Depends(require_edit),
 ):
-    """Get a single user by ID (admin only)."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -73,16 +68,14 @@ def update_user(
     user_id: int,
     body: UserUpdate,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _user: User = Depends(require_edit),
 ):
-    """Update a user's details (admin only)."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # Check email uniqueness if changing email
     if "email" in update_data:
         existing = (
             db.query(User)
@@ -91,6 +84,9 @@ def update_user(
         )
         if existing:
             raise HTTPException(status_code=400, detail="Email already in use")
+
+    if "password" in update_data:
+        update_data["hashed_password"] = hash_password(update_data.pop("password"))
 
     for field, value in update_data.items():
         setattr(user, field, value)
@@ -104,13 +100,12 @@ def update_user(
 def toggle_user_active(
     user_id: int,
     db: Session = Depends(get_db),
-    admin: User = Depends(require_admin),
+    current: User = Depends(require_edit),
 ):
-    """Toggle a user's active status (admin only)."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if user.id == admin.id:
+    if user.id == current.id:
         raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
 
     user.is_active = not user.is_active

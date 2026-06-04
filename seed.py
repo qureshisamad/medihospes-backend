@@ -1,88 +1,124 @@
-"""Seed script — creates initial admin, staff users, clinics, and job titles."""
+"""Seed script (v2) — Manager/HR accounts, departments, sites, shift types,
+job titles, and a few sample employees with contracts.
+
+Reflects the confirmed v2.0 requirements: 4 departments, the 4 documented
+shift types (+ a placeholder 5th, TBD), and role-matched employees.
+"""
+
+from datetime import time
 
 from app.core.database import SessionLocal
 from app.core.security import hash_password
-from app.models.clinic import Clinic
+from app.models.department import Department
+from app.models.employee import ContractType, Employee
 from app.models.job_title import JobTitleRecord
-from app.models.user import ContractType, User, UserRole
-
-# Import all models so SQLAlchemy can resolve relationships
-from app.models.shift import Shift  # noqa: F401
-from app.models.booking import ShiftBooking  # noqa: F401
-from app.models.time_entry import TimeEntry  # noqa: F401
+from app.models.shift_type import ShiftType
+from app.models.site import Site
+from app.models.user import User, UserRole
 
 
 def seed():
     db = SessionLocal()
 
-    # Check if already seeded
     if db.query(User).first():
         print("Database already has users — skipping seed.")
         db.close()
         return
 
-    # Default job titles
+    # --- Login accounts: Manager + HR (the only two access levels) ---
+    manager = User(
+        email="manager@medihospes.it",
+        hashed_password=hash_password("manager123"),
+        first_name="Anna",
+        last_name="Conti",
+        role=UserRole.MANAGER,
+    )
+    hr = User(
+        email="hr@medihospes.it",
+        hashed_password=hash_password("hr123"),
+        first_name="Marco",
+        last_name="Greco",
+        role=UserRole.HR,
+    )
+
+    # --- Departments (req v2.0 §1.1) ---
+    administrative = Department(name="Administrative", code="ADM")
+    oss = Department(name="OSS", code="OSS")
+    auxiliaries = Department(name="Auxiliaries", code="AUX")
+    coc = Department(name="COC", code="COC")
+
+    # --- Sites ---
+    site1 = Site(name="Messina I", code="ME-I", address="Via Roma 1, Messina")
+    site2 = Site(name="Messina II", code="ME-II", address="Via Garibaldi 45, Messina")
+
+    # --- Job titles / roles (drive substitution matching) ---
     job_titles = [
-        JobTitleRecord(name="administrative", label="Administrative"),
-        JobTitleRecord(name="nurse", label="Nurse"),
         JobTitleRecord(name="doctor", label="Doctor"),
-        JobTitleRecord(name="technician", label="Technician"),
-        JobTitleRecord(name="support", label="Support"),
+        JobTitleRecord(name="administrative", label="Administrative"),
+        JobTitleRecord(name="oss", label="OSS"),
+        JobTitleRecord(name="auxiliary", label="Auxiliary"),
+        JobTitleRecord(name="coc", label="COC"),
     ]
-    db.add_all(job_titles)
 
-    # Admin user
-    admin = User(
-        email="admin@medihospes.it",
-        hashed_password=hash_password("admin123"),
-        first_name="Admin",
-        last_name="Manager",
-        role=UserRole.ADMIN,
-        job_title="administrative",
-        contract_type=ContractType.FULL_TIME,
-        weekly_hour_limit=36.0,
+    # --- Shift types (req v2.0 §1.3) ---
+    shift_types = [
+        ShiftType(code="A", name="Morning", start_time=time(8, 0),
+                  end_time=time(14, 0), duration_hours=6.0, crosses_midnight=False),
+        ShiftType(code="B", name="Afternoon", start_time=time(9, 0),
+                  end_time=time(16, 30), duration_hours=7.0, crosses_midnight=False),
+        ShiftType(code="C", name="Night", start_time=time(21, 0),
+                  end_time=time(0, 30), duration_hours=8.0, crosses_midnight=True),
+        ShiftType(code="P/N", name="Afternoon/Night", start_time=time(15, 0),
+                  end_time=time(0, 0), duration_hours=9.0, crosses_midnight=True),
+        ShiftType(code="TBD", name="5th type (to confirm)", start_time=time(0, 0),
+                  end_time=time(0, 0), duration_hours=0.0, crosses_midnight=False,
+                  notes="Placeholder — definition pending meeting", is_active=False),
+    ]
+
+    db.add_all(
+        [manager, hr, administrative, oss, auxiliaries, coc, site1, site2]
+        + job_titles
+        + shift_types
     )
+    db.flush()  # assign IDs for FK references below
 
-    # Staff users
-    nurse = User(
-        email="nurse@medihospes.it",
-        hashed_password=hash_password("staff123"),
-        first_name="Maria",
-        last_name="Rossi",
-        role=UserRole.STAFF,
-        job_title="nurse",
-        contract_type=ContractType.FULL_TIME,
-        weekly_hour_limit=36.0,
-    )
-
-    part_time = User(
-        email="tech@medihospes.it",
-        hashed_password=hash_password("staff123"),
-        first_name="Luca",
-        last_name="Bianchi",
-        role=UserRole.STAFF,
-        job_title="technician",
-        contract_type=ContractType.PART_TIME,
-        weekly_hour_limit=20.0,
-    )
-
-    # Clinics
-    clinic1 = Clinic(name="Messina I", code="ME-I", address="Via Roma 1, Messina")
-    clinic2 = Clinic(name="Messina II", code="ME-II", address="Via Garibaldi 45, Messina")
-    clinic3 = Clinic(name="Catania Centro", code="CT-I", address="Corso Italia 12, Catania")
-
-    db.add_all([admin, nurse, part_time, clinic1, clinic2, clinic3])
+    # --- Sample employees with contracts (no login) ---
+    employees = [
+        Employee(
+            first_name="Maria", last_name="Rossi", department_id=oss.id,
+            site_id=site1.id, job_title="oss", contract_type=ContractType.FULL_TIME,
+            monthly_hour_limit=130.35,
+        ),
+        Employee(
+            first_name="Luca", last_name="Bianchi", department_id=administrative.id,
+            site_id=site1.id, job_title="administrative",
+            contract_type=ContractType.PART_TIME, monthly_hour_limit=104.28,
+            flexible_shift=True,
+        ),
+        Employee(
+            first_name="Giulia", last_name="Ferrari", department_id=oss.id,
+            site_id=site2.id, job_title="oss", contract_type=ContractType.FULL_TIME,
+            monthly_hour_limit=130.35, flexible_location=True,
+        ),
+        Employee(
+            first_name="Paolo", last_name="Esposito", department_id=coc.id,
+            site_id=site1.id, job_title="doctor", contract_type=ContractType.FULL_TIME,
+            monthly_hour_limit=130.35,
+        ),
+    ]
+    db.add_all(employees)
     db.commit()
     db.close()
 
     print("Seed complete!")
     print()
-    print("  Admin login:  admin@medihospes.it / admin123")
-    print("  Nurse login:  nurse@medihospes.it / staff123")
-    print("  Tech login:   tech@medihospes.it  / staff123")
+    print("  Manager login:  manager@medihospes.it / manager123")
+    print("  HR login:       hr@medihospes.it / hr123")
     print()
-    print("  Clinics: Messina I (ME-I), Messina II (ME-II), Catania Centro (CT-I)")
-    print("  Job Titles: Administrative, Nurse, Doctor, Technician, Support")
+    print("  Departments: Administrative, OSS, Auxiliaries, COC")
+    print("  Sites: Messina I (ME-I), Messina II (ME-II)")
+    print("  Shift types: A, B, C, P/N (+ TBD placeholder)")
+    print("  4 sample employees with contracts seeded.")
 
 
 if __name__ == "__main__":
