@@ -14,6 +14,7 @@ other categories over time (client request, June 2026).
 
 from sqlalchemy import (
     Boolean,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -25,12 +26,25 @@ from app.core.database import Base
 
 
 class RotationPattern(Base):
+    """A category's scheduling profile.
+
+    Holds the working-shift palette (steps), the daily coverage requirement
+    (how many people on each shift) and the rest rule. When coverage rows are
+    defined, the auto-fill is coverage-driven and constraint-aware (contract
+    hours + rest between shifts); otherwise it falls back to a staggered cycle.
+    """
+
     __tablename__ = "rotation_patterns"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(120))
     job_title: Mapped[str] = mapped_column(
         String(100), index=True, comment="Category this rotation applies to"
+    )
+    min_rest_hours: Mapped[float] = mapped_column(
+        Float,
+        default=11.0,
+        comment="Minimum gap between end of one shift and start of the next",
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -39,6 +53,11 @@ class RotationPattern(Base):
         back_populates="pattern",
         cascade="all, delete-orphan",
         order_by="RotationStep.position",
+    )
+    coverage = relationship(
+        "CoverageRequirement",
+        back_populates="pattern",
+        cascade="all, delete-orphan",
     )
 
 
@@ -60,4 +79,29 @@ class RotationStep(Base):
     )
 
     pattern = relationship("RotationPattern", back_populates="steps")
+    shift_type = relationship("ShiftType")
+
+
+class CoverageRequirement(Base):
+    """How many people the category needs on a given shift each day."""
+
+    __tablename__ = "coverage_requirements"
+    __table_args__ = (
+        UniqueConstraint(
+            "pattern_id", "shift_type_id", name="uq_pattern_shift_coverage"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    pattern_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("rotation_patterns.id", ondelete="CASCADE"), index=True
+    )
+    shift_type_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("shift_types.id")
+    )
+    required_count: Mapped[int] = mapped_column(
+        Integer, default=1, comment="People needed on this shift per day"
+    )
+
+    pattern = relationship("RotationPattern", back_populates="coverage")
     shift_type = relationship("ShiftType")

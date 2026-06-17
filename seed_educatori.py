@@ -8,12 +8,19 @@ from app.core.database import SessionLocal
 from app.models.department import Department
 from app.models.employee import ContractType, Employee
 from app.models.job_title import JobTitleRecord
-from app.models.rotation import RotationPattern, RotationStep
+from app.models.rotation import (
+    CoverageRequirement,
+    RotationPattern,
+    RotationStep,
+)
 from app.models.shift_type import ShiftType
 
 EDU_ROLE = "educatore"
 # The Educatori cycle, in order (note: ① M, ② P/N, ③ S, ④ R)
 CYCLE_CODES = ["M/Ed", "P/N/Ed", "S", "R"]
+# Daily coverage requirement: how many people on each working shift per day.
+COVERAGE = {"M/Ed": 1, "P/N/Ed": 1, "S": 1}
+MIN_REST_HOURS = 11.0
 
 SAMPLE = [
     ("Cina", "Antonella"),
@@ -88,9 +95,19 @@ def main():
             )
             db.add(pattern)
             db.flush()
+        pattern.min_rest_hours = MIN_REST_HOURS
+        # Clear existing children first so the unique (pattern, position) /
+        # (pattern, shift) constraints don't clash on re-seed.
+        pattern.steps.clear()
+        pattern.coverage.clear()
+        db.flush()
         pattern.steps = [
             RotationStep(position=i, shift_type_id=sid)
             for i, sid in enumerate(cycle_ids)
+        ]
+        pattern.coverage = [
+            CoverageRequirement(shift_type_id=codes[c], required_count=n)
+            for c, n in COVERAGE.items()
         ]
 
         db.commit()
@@ -100,6 +117,7 @@ def main():
         print(f"  Job title:  {EDU_ROLE}")
         print(f"  Employees:  {len(SAMPLE)} educatori")
         print(f"  Rotation:   {' -> '.join(CYCLE_CODES)}  (pattern id={pattern.id})")
+        print(f"  Coverage:   {COVERAGE}  · min rest {MIN_REST_HOURS}h")
     finally:
         db.close()
 

@@ -5,10 +5,11 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_edit
 from app.core.database import get_db
-from app.models.rotation import RotationPattern, RotationStep
+from app.models.rotation import CoverageRequirement, RotationPattern, RotationStep
 from app.models.shift_type import ShiftType
 from app.models.user import User
 from app.schemas.rotation import (
+    CoverageItem,
     RotationPatternCreate,
     RotationPatternRead,
     RotationPatternUpdate,
@@ -24,7 +25,21 @@ def _serialize(p: RotationPattern) -> RotationPatternRead:
         job_title=p.job_title,
         is_active=p.is_active,
         shift_type_ids=[s.shift_type_id for s in p.steps],
+        min_rest_hours=p.min_rest_hours,
+        coverage=[
+            CoverageItem(shift_type_id=c.shift_type_id, required_count=c.required_count)
+            for c in p.coverage
+        ],
     )
+
+
+def _set_coverage(pattern: RotationPattern, items: list[CoverageItem]) -> None:
+    pattern.coverage = [
+        CoverageRequirement(
+            shift_type_id=i.shift_type_id, required_count=i.required_count
+        )
+        for i in items
+    ]
 
 
 def _validate_shift_types(db: Session, ids: list[int]) -> None:
@@ -66,8 +81,15 @@ def create_rotation(
     _u: User = Depends(require_edit),
 ):
     _validate_shift_types(db, body.shift_type_ids)
-    pattern = RotationPattern(name=body.name, job_title=body.job_title)
+    if body.coverage:
+        _validate_shift_types(db, [c.shift_type_id for c in body.coverage])
+    pattern = RotationPattern(
+        name=body.name,
+        job_title=body.job_title,
+        min_rest_hours=body.min_rest_hours,
+    )
     _set_steps(pattern, body.shift_type_ids)
+    _set_coverage(pattern, body.coverage)
     db.add(pattern)
     db.commit()
     db.refresh(pattern)
@@ -93,9 +115,25 @@ def update_rotation(
         pattern.job_title = body.job_title
     if body.is_active is not None:
         pattern.is_active = body.is_active
+    if body.min_rest_hours is not None:
+        pattern.min_rest_hours = body.min_rest_hours
     if body.shift_type_ids is not None:
         _validate_shift_types(db, body.shift_type_ids)
+    if body.coverage is not None and body.coverage:
+        _validate_shift_types(db, [c.shift_type_id for c in body.coverage])
+
+    # Clear children first so the unique constraints don't clash with the
+    # replacement rows during flush.
+    if body.shift_type_ids is not None:
+        pattern.steps.clear()
+    if body.coverage is not None:
+        pattern.coverage.clear()
+    if body.shift_type_ids is not None or body.coverage is not None:
+        db.flush()
+    if body.shift_type_ids is not None:
         _set_steps(pattern, body.shift_type_ids)
+    if body.coverage is not None:
+        _set_coverage(pattern, body.coverage)
 
     db.commit()
     db.refresh(pattern)

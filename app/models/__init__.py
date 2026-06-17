@@ -6,5 +6,9 @@ from app.models.shift_type import ShiftType  # noqa: F401
 from app.models.employee import Employee, ContractType  # noqa: F401
 from app.models.coverage import EmployeeCoverage  # noqa: F401
 from app.models.roster import RosterAssignment, AbsenceCode  # noqa: F401
-from app.models.rotation import RotationPattern, RotationStep  # noqa: F401
+from app.models.rotation import (  # noqa: F401
+    CoverageRequirement,
+    RotationPattern,
+    RotationStep,
+)
 from app.models.job_title import JobTitleRecord  # noqa: F401

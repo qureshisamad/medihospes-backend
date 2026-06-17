@@ -10,11 +10,18 @@ class RotationStepRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CoverageItem(BaseModel):
+    shift_type_id: int
+    required_count: int = 1
+
+
 class RotationPatternCreate(BaseModel):
     name: str
     job_title: str
     # Ordered cycle: shift_type_id at each position (index = position)
     shift_type_ids: list[int]
+    min_rest_hours: float = 11.0
+    coverage: list[CoverageItem] = []
 
 
 class RotationPatternUpdate(BaseModel):
@@ -22,6 +29,8 @@ class RotationPatternUpdate(BaseModel):
     job_title: str | None = None
     is_active: bool | None = None
     shift_type_ids: list[int] | None = None
+    min_rest_hours: float | None = None
+    coverage: list[CoverageItem] | None = None
 
 
 class RotationPatternRead(BaseModel):
@@ -30,6 +39,8 @@ class RotationPatternRead(BaseModel):
     job_title: str
     is_active: bool
     shift_type_ids: list[int]
+    min_rest_hours: float
+    coverage: list[CoverageItem]
 
     model_config = {"from_attributes": True}
 
@@ -39,13 +50,13 @@ class AutoFillRequest(BaseModel):
     month: int
     pattern_id: int
     department_id: int | None = None
-    # True: stagger starts automatically (balanced, no manual day-1 needed).
-    # False: use each employee's existing day-1 shift as their start.
+    # Only used by the staggered-cycle fallback (when no coverage is defined).
     auto_stagger: bool = True
 
 
 class AutoFillResult(BaseModel):
     filled_cells: int
     employees_filled: int
-    skipped: list[str]      # manual mode: employees with no valid day-1 seed
-    warnings: list[str]     # e.g. duplicate day-1 shifts → identical schedules
+    skipped: list[str]      # cycle mode: employees with no valid day-1 seed
+    warnings: list[str]     # e.g. under-utilised staff, duplicate day-1 shifts
+    unmet: list[str]        # coverage mode: shifts that couldn't be staffed
