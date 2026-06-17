@@ -39,9 +39,13 @@ class AutoFillRequest(BaseModel):
     month: int
     pattern_id: int
     department_id: int | None = None
+    # True: stagger starts automatically (balanced, no manual day-1 needed).
+    # False: use each employee's existing day-1 shift as their start.
+    auto_stagger: bool = True
 
 
 class AutoFillResult(BaseModel):
     filled_cells: int
     employees_filled: int
-    skipped: list[str]  # names of employees with no valid day-1 seed
+    skipped: list[str]      # manual mode: employees with no valid day-1 seed
+    warnings: list[str]     # e.g. duplicate day-1 shifts → identical schedules

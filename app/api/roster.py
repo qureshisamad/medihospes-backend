@@ -142,7 +142,13 @@ def auto_fill(
         raise HTTPException(status_code=404, detail="Rotation pattern not found")
 
     result = auto_fill_month(
-        db, pattern, body.year, body.month, user.id, body.department_id
+        db,
+        pattern,
+        body.year,
+        body.month,
+        user.id,
+        body.department_id,
+        auto_stagger=body.auto_stagger,
     )
     return AutoFillResult(**result)
 

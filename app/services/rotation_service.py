@@ -33,11 +33,29 @@ def auto_fill_month(
     month: int,
     created_by: int,
     department_id: int | None = None,
+    auto_stagger: bool = True,
 ) -> dict:
-    """Fill the month for every employee in the pattern's category."""
+    """Fill the month for every employee in the pattern's category.
+
+    auto_stagger=True (recommended): the service assigns each employee a DISTINCT
+    starting position in the cycle (round-robin in grid order), so coverage is
+    balanced and no two people get an identical schedule. Day 1 is set too.
+
+    auto_stagger=False: the manager's existing DAY-1 shift is used as each
+    employee's starting phase (the original behaviour). Duplicate day-1 shifts
+    are reported as warnings because they produce identical schedules.
+
+    In both modes, absences already entered are preserved and the result stays
+    fully editable.
+    """
     cycle = [s.shift_type_id for s in pattern.steps]  # ordered by position
     if not cycle:
-        return {"filled_cells": 0, "employees_filled": 0, "skipped": []}
+        return {
+            "filled_cells": 0,
+            "employees_filled": 0,
+            "skipped": [],
+            "warnings": [],
+        }
     cycle_len = len(cycle)
 
     last_day = calendar.monthrange(year, month)[1]
@@ -49,14 +67,38 @@ def auto_fill_month(
     )
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
-    employees = q.all()
+    # Deterministic order (matches the roster grid) so staggering is intuitive.
+    employees = q.order_by(Employee.last_name, Employee.first_name).all()
 
     filled_cells = 0
     employees_filled = 0
     skipped: list[str] = []
+    warnings: list[str] = []
 
-    for emp in employees:
-        # Existing cells for this employee in the month, keyed by date
+    # In manual mode, flag employees who share a day-1 shift (→ identical rotas).
+    if not auto_stagger:
+        seen: dict[int, list[str]] = {}
+        for emp in employees:
+            c = (
+                db.query(RosterAssignment)
+                .filter(
+                    RosterAssignment.employee_id == emp.id,
+                    RosterAssignment.work_date == first,
+                )
+                .first()
+            )
+            if c and c.shift_type_id in cycle:
+                seen.setdefault(c.shift_type_id, []).append(
+                    f"{emp.last_name} {emp.first_name}"
+                )
+        for sid, names in seen.items():
+            if len(names) > 1:
+                warnings.append(
+                    f"{len(names)} employees share the same day-1 shift "
+                    f"and will get identical schedules: {', '.join(names)}"
+                )
+
+    for idx, emp in enumerate(employees):
         existing = {
             c.work_date: c
             for c in db.query(RosterAssignment)
@@ -68,22 +110,27 @@ def auto_fill_month(
             .all()
         }
 
-        seed_cell = existing.get(first)
-        # Need a day-1 shift that is part of this cycle to derive the phase
-        if (
-            seed_cell is None
-            or seed_cell.shift_type_id is None
-            or seed_cell.shift_type_id not in cycle
-        ):
-            skipped.append(f"{emp.last_name} {emp.first_name}")
-            continue
+        if auto_stagger:
+            # Distinct, balanced start per employee — no manual day-1 needed.
+            start_index = idx % cycle_len
+            day_range = range(1, last_day + 1)
+        else:
+            seed_cell = existing.get(first)
+            if (
+                seed_cell is None
+                or seed_cell.shift_type_id is None
+                or seed_cell.shift_type_id not in cycle
+            ):
+                skipped.append(f"{emp.last_name} {emp.first_name}")
+                continue
+            start_index = cycle.index(seed_cell.shift_type_id)
+            day_range = range(2, last_day + 1)  # keep manager's day-1 seed
 
-        seed_index = cycle.index(seed_cell.shift_type_id)
         employees_filled += 1
 
-        for day in range(2, last_day + 1):
+        for day in day_range:
             d = date(year, month, day)
-            target_shift = cycle[(seed_index + (day - 1)) % cycle_len]
+            target_shift = cycle[(start_index + (day - 1)) % cycle_len]
 
             cell = existing.get(d)
             # Preserve manually-entered absences (sick/vacation/transfer/etc.)
@@ -106,4 +153,5 @@ def auto_fill_month(
         "filled_cells": filled_cells,
         "employees_filled": employees_filled,
         "skipped": skipped,
+        "warnings": warnings,
     }
