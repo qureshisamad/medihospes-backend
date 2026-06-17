@@ -14,6 +14,7 @@ from app.api.deps import require_edit
 from app.core.database import get_db
 from app.models.employee import Employee
 from app.models.roster import RosterAssignment
+from app.models.rotation import RotationPattern
 from app.models.shift_type import ShiftType
 from app.models.user import User
 from app.schemas.roster import (
@@ -22,7 +23,9 @@ from app.schemas.roster import (
     EmployeeHours,
     SubstituteCandidate,
 )
+from app.schemas.rotation import AutoFillRequest, AutoFillResult
 from app.services.hours_service import employee_hours_summary, month_bounds
+from app.services.rotation_service import auto_fill_month
 from app.services.substitution_service import suggest_substitutes
 
 router = APIRouter(prefix="/roster", tags=["Roster"])
@@ -33,19 +36,22 @@ def get_roster(
     year: int = Query(...),
     month: int = Query(..., ge=1, le=12),
     department_id: int | None = Query(None),
+    job_title: str | None = Query(None),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
 ):
-    """Return every roster cell for the given month (optionally one dept)."""
+    """Return every roster cell for the given month (optionally one dept/role)."""
     start, end = month_bounds(year, month)
     q = db.query(RosterAssignment).filter(
         RosterAssignment.work_date >= start,
         RosterAssignment.work_date <= end,
     )
-    if department_id is not None:
-        q = q.join(Employee, Employee.id == RosterAssignment.employee_id).filter(
-            Employee.department_id == department_id
-        )
+    if department_id is not None or job_title is not None:
+        q = q.join(Employee, Employee.id == RosterAssignment.employee_id)
+        if department_id is not None:
+            q = q.filter(Employee.department_id == department_id)
+        if job_title is not None:
+            q = q.filter(Employee.job_title == job_title)
     return q.order_by(RosterAssignment.work_date).all()
 
 
@@ -114,6 +120,31 @@ def delete_cell(
     if cell:
         db.delete(cell)
         db.commit()
+
+
+@router.post("/auto-fill", response_model=AutoFillResult)
+def auto_fill(
+    body: AutoFillRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_edit),
+):
+    """Propagate a rotation across the month from each employee's day-1 seed.
+
+    The manager sets day 1 for each employee first; this fills days 2..end by
+    advancing each through the cycle. Absences already entered are preserved.
+    Every cell remains editable afterwards (req: 'always modifiable')."""
+    pattern = (
+        db.query(RotationPattern)
+        .filter(RotationPattern.id == body.pattern_id)
+        .first()
+    )
+    if not pattern:
+        raise HTTPException(status_code=404, detail="Rotation pattern not found")
+
+    result = auto_fill_month(
+        db, pattern, body.year, body.month, user.id, body.department_id
+    )
+    return AutoFillResult(**result)
 
 
 @router.get("/substitutes", response_model=list[SubstituteCandidate])

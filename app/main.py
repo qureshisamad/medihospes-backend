@@ -14,6 +14,7 @@ from app.api import (
     job_titles,
     reports,
     roster,
+    rotations,
     shift_types,
     sites,
     users,
@@ -60,6 +61,7 @@ app.include_router(job_titles.router, prefix="/api")
 app.include_router(shift_types.router, prefix="/api")
 app.include_router(employees.router, prefix="/api")
 app.include_router(roster.router, prefix="/api")
+app.include_router(rotations.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 
 
