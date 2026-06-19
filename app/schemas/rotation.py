@@ -1,5 +1,7 @@
 """Rotation library schemas (v2)."""
 
+from datetime import date, datetime
+
 from pydantic import BaseModel
 
 
@@ -52,6 +54,31 @@ class AutoFillRequest(BaseModel):
     department_id: int | None = None
     # Only used by the staggered-cycle fallback (when no coverage is defined).
     auto_stagger: bool = True
+    # True = discard manual edits and fill from scratch. Default keeps them.
+    reset_manual: bool = False
+
+
+class CascadeRequest(BaseModel):
+    """Re-derive ONE employee's later days from a (just-edited) cell."""
+
+    employee_id: int
+    work_date: date
+    pattern_id: int
+
+
+class CascadeResult(BaseModel):
+    updated: int
+
+
+class ChangeLogRead(BaseModel):
+    id: int
+    action: str
+    employee_name: str | None
+    work_date: date | None
+    detail: str
+    changed_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class AutoFillResult(BaseModel):

@@ -138,33 +138,82 @@ def export_roster_pdf(
 ):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        PageBreak,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet
 
     employees, days, cell_map = _build_grid(db, year, month, department_id)
+    styles = getSampleStyleSheet()
 
-    header = ["Employee"] + [str(d) for d in days]
-    rows = [header]
-    for emp in employees:
-        rows.append(
-            [f"{emp.last_name} {emp.first_name}"]
-            + [cell_map.get((emp.id, d), "") for d in days]
+    # Page geometry — landscape A4 with tight margins.
+    margin = 12 * mm
+    page_w = landscape(A4)[0]
+    usable = page_w - 2 * margin
+    emp_w = 44 * mm                 # employee-name column
+    min_day_w = 9 * mm             # keep day columns readable
+    days_per_page = max(1, int((usable - emp_w) // min_day_w))
+
+    # Split the month into column-chunks so nothing is clipped off the page.
+    chunks = [days[i : i + days_per_page] for i in range(0, len(days), days_per_page)]
+
+    table_style = TableStyle(
+        [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1A7340")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F3F7F4")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ]
+    )
+
+    title = f"Monthly Roster — {calendar.month_name[month]} {year}"
+    story = []
+    for ci, chunk in enumerate(chunks):
+        if ci > 0:
+            story.append(PageBreak())
+        sub = (
+            f"{title}   (days {chunk[0]}–{chunk[-1]})"
+            if len(chunks) > 1
+            else title
         )
+        story.append(Paragraph(sub, styles["Heading2"]))
+        story.append(Spacer(1, 6))
+
+        header = ["Employee"] + [str(d) for d in chunk]
+        rows = [header]
+        for emp in employees:
+            rows.append(
+                [f"{emp.last_name} {emp.first_name}"]
+                + [cell_map.get((emp.id, d), "") for d in chunk]
+            )
+        day_w = (usable - emp_w) / len(chunk)
+        col_widths = [emp_w] + [day_w] * len(chunk)
+        table = Table(rows, colWidths=col_widths, repeatRows=1)
+        table.setStyle(table_style)
+        story.append(table)
 
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4))
-    table = Table(rows, repeatRows=1)
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1A7340")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTSIZE", (0, 0), (-1, -1), 6),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-                ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-            ]
-        )
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        leftMargin=margin,
+        rightMargin=margin,
+        topMargin=margin,
+        bottomMargin=margin,
+        title=f"Roster {year}-{month:02d}",
     )
-    doc.build([table])
+    doc.build(story)
     buf.seek(0)
     fname = f"roster_{year}_{month:02d}.pdf"
     return StreamingResponse(

@@ -2,19 +2,19 @@
 
 Two modes, both manager-triggered and fully editable afterwards (req v2.0 §4):
 
-1. COVERAGE-DRIVEN (used when the pattern has coverage requirements) — fills
-   each day to meet the required headcount per shift while respecting:
-     * contractual monthly hours (part-time vs full-time — never exceeds the cap)
-     * a minimum rest gap between consecutive shifts (so e.g. a 00:00-ending
-       P/N is never followed by an 08:00 morning the next day)
-     * one shift per person per day, role/category match
-   It balances load (least-utilised staff first) and reports any shift it could
-   NOT staff within the rules, rather than silently breaking a constraint.
+1. COVERAGE-DRIVEN (when the pattern has coverage requirements) — fills each day
+   to the required headcount per shift while respecting contractual monthly
+   hours (part vs full-time), a minimum rest gap between consecutive shifts, and
+   one shift per person per day. Balances load and reports shifts it could NOT
+   staff within the rules.
 
 2. STAGGERED CYCLE (fallback when no coverage is defined) — advances each
    employee through the pattern's cycle from a distinct, auto-staggered start.
 
-Absences already entered (sick/vacation/etc.) are always preserved.
+Cells the manager has set BY HAND (is_manual) and any ABSENCE are treated as
+fixed: they are preserved and counted as constraints (coverage already met,
+hours used, rest imposed). Pass reset_manual=True to discard manual edits and
+fill from scratch.
 """
 
 import calendar
@@ -45,8 +45,6 @@ def _start_dt(d: date, st: ShiftType) -> datetime:
 
 
 def _end_dt(d: date, st: ShiftType) -> datetime:
-    """End = start + paid duration. Uses duration (authoritative) so midnight
-    crossing is handled without relying on the crosses_midnight flag."""
     return _start_dt(d, st) + timedelta(hours=st.duration_hours or 0.0)
 
 
@@ -68,14 +66,15 @@ def auto_fill_month(
     created_by: int,
     department_id: int | None = None,
     auto_stagger: bool = True,
+    reset_manual: bool = False,
 ) -> dict:
-    """Dispatch: coverage-driven if the pattern defines coverage, else cycle."""
     if pattern.coverage:
         return coverage_driven_fill(
-            db, pattern, year, month, created_by, department_id
+            db, pattern, year, month, created_by, department_id, reset_manual
         )
     return staggered_cycle_fill(
-        db, pattern, year, month, created_by, department_id, auto_stagger
+        db, pattern, year, month, created_by, department_id, auto_stagger,
+        reset_manual,
     )
 
 
@@ -89,16 +88,16 @@ def coverage_driven_fill(
     month: int,
     created_by: int,
     department_id: int | None = None,
+    reset_manual: bool = False,
 ) -> dict:
     result = _empty_result()
-
     coverage = {c.shift_type_id: c.required_count for c in pattern.coverage}
     if not coverage:
         return result
     shift_types = {
-        s.id: s
-        for s in db.query(ShiftType).filter(ShiftType.id.in_(coverage)).all()
+        s.id: s for s in db.query(ShiftType).filter(ShiftType.id.in_(coverage)).all()
     }
+    all_shifts = {s.id: s for s in db.query(ShiftType).all()}
     min_rest = pattern.min_rest_hours or DEFAULT_MIN_REST_HOURS
     last_day = calendar.monthrange(year, month)[1]
     first = date(year, month, 1)
@@ -107,11 +106,10 @@ def coverage_driven_fill(
     employees = _category_employees(db, pattern, department_id)
     if not employees:
         return result
-
-    # Preserve absences; clear existing WORKED cells so the fill is deterministic.
     emp_ids = [e.id for e in employees]
-    absences: dict[tuple[int, date], None] = {}
-    for c in (
+
+    # Load existing cells; classify fixed (absence, or manual unless reset).
+    existing = (
         db.query(RosterAssignment)
         .filter(
             RosterAssignment.employee_id.in_(emp_ids),
@@ -119,22 +117,35 @@ def coverage_driven_fill(
             RosterAssignment.work_date <= month_end,
         )
         .all()
-    ):
+    )
+    absent: dict[tuple[int, date], None] = {}
+    fixed_work: dict[tuple[int, date], int] = {}  # manual worked cells kept
+    for c in existing:
         if c.absence_code is not None:
-            absences[(c.employee_id, c.work_date)] = None
-    db.query(RosterAssignment).filter(
+            absent[(c.employee_id, c.work_date)] = None
+        elif c.is_manual and not reset_manual:
+            fixed_work[(c.employee_id, c.work_date)] = c.shift_type_id
+
+    # Delete cells we are about to regenerate (auto always; manual if reset).
+    del_q = db.query(RosterAssignment).filter(
         RosterAssignment.employee_id.in_(emp_ids),
         RosterAssignment.work_date >= first,
         RosterAssignment.work_date <= month_end,
         RosterAssignment.absence_code.is_(None),
-    ).delete(synchronize_session=False)
+    )
+    if not reset_manual:
+        del_q = del_q.filter(RosterAssignment.is_manual.is_(False))
+    del_q.delete(synchronize_session=False)
 
-    # Per-employee running state
+    # Reserve hours for kept manual cells up front so auto stays within contract.
     projected = {e.id: 0.0 for e in employees}
-    last_end = {e.id: None for e in employees}  # datetime of last worked shift end
+    for (eid, d), sid in fixed_work.items():
+        st = all_shifts.get(sid)
+        if st:
+            projected[eid] += st.duration_hours or 0.0
 
-    # Order shifts hardest-first (latest start) so tightly-constrained shifts
-    # claim staff before the easy ones.
+    last_end: dict[int, datetime | None] = {e.id: None for e in employees}
+
     shift_order = sorted(
         coverage.keys(),
         key=lambda sid: shift_types[sid].start_time or time(0, 0),
@@ -146,47 +157,61 @@ def coverage_driven_fill(
 
     for day in range(1, last_day + 1):
         d = date(year, month, day)
+        today_shift: dict[int, int] = {}  # emp -> shift worked today
         assigned_today: set[int] = set()
+
+        # Apply kept manual cells for the day first.
+        for e in employees:
+            sid = fixed_work.get((e.id, d))
+            if sid is not None:
+                today_shift[e.id] = sid
+                assigned_today.add(e.id)
 
         for sid in shift_order:
             st = shift_types[sid]
-            need = coverage[sid]
-            placed = 0
+            already = sum(1 for e in employees if today_shift.get(e.id) == sid)
+            need = coverage[sid] - already
+            if need <= 0:
+                continue
             start = _start_dt(d, st)
+            end = _end_dt(d, st)
 
-            # Build eligible candidate pool
             pool = []
             for e in employees:
-                if (e.id, d) in absences:
+                if (e.id, d) in absent or e.id in assigned_today:
                     continue
-                if e.id in assigned_today:
-                    continue
-                # rest rule vs their last worked shift
                 le = last_end[e.id]
                 if le is not None and (start - le) < timedelta(hours=min_rest):
                     continue
-                # contractual monthly hours
+                # forward: respect a fixed shift the employee already has tomorrow
+                nxt = fixed_work.get((e.id, d + timedelta(days=1)))
+                if nxt is not None:
+                    nstart = _start_dt(d + timedelta(days=1), all_shifts[nxt])
+                    if (nstart - end) < timedelta(hours=min_rest):
+                        continue
                 if projected[e.id] + (st.duration_hours or 0.0) > (
                     e.monthly_hour_limit or 0.0
                 ) + 1e-6:
                     continue
                 pool.append(e)
 
-            # least-utilised first, then fewest hours, stable by name
             pool.sort(key=lambda e: (projected[e.id], e.last_name, e.first_name))
 
+            placed = 0
             for e in pool:
                 if placed >= need:
                     break
-                cell = RosterAssignment(
-                    employee_id=e.id,
-                    work_date=d,
-                    shift_type_id=sid,
-                    created_by=created_by,
+                db.add(
+                    RosterAssignment(
+                        employee_id=e.id,
+                        work_date=d,
+                        shift_type_id=sid,
+                        created_by=created_by,
+                        is_manual=False,
+                    )
                 )
-                db.add(cell)
                 projected[e.id] += st.duration_hours or 0.0
-                last_end[e.id] = _end_dt(d, st)
+                today_shift[e.id] = sid
                 assigned_today.add(e.id)
                 filled_emps.add(e.id)
                 filled += 1
@@ -194,18 +219,20 @@ def coverage_driven_fill(
 
             if placed < need:
                 result["unmet"].append(
-                    f"{d.isoformat()} {st.code}: {need - placed} of {need} "
-                    f"unfilled (no staff within rest/hours limits)"
+                    f"{d.isoformat()} {st.code}: {need - placed} of "
+                    f"{coverage[sid]} unfilled (no staff within rest/hours limits)"
                 )
 
-        # Anyone not working today and not absent: rest day clears their rest gap
+        # End of day: roll rest state forward.
         for e in employees:
-            if e.id not in assigned_today and (e.id, d) not in absences:
-                last_end[e.id] = None
+            sid = today_shift.get(e.id)
+            if sid is not None:
+                last_end[e.id] = _end_dt(d, all_shifts[sid])
+            else:
+                last_end[e.id] = None  # off / absent clears the rest gap
 
     db.commit()
 
-    # Flag under-utilised staff (well below contract) for the manager
     for e in employees:
         limit = e.monthly_hour_limit or 0.0
         if limit and projected[e.id] < limit * 0.5:
@@ -230,6 +257,7 @@ def staggered_cycle_fill(
     created_by: int,
     department_id: int | None = None,
     auto_stagger: bool = True,
+    reset_manual: bool = False,
 ) -> dict:
     result = _empty_result()
     cycle = [s.shift_type_id for s in pattern.steps]
@@ -238,7 +266,6 @@ def staggered_cycle_fill(
     cycle_len = len(cycle)
     last_day = calendar.monthrange(year, month)[1]
     first = date(year, month, 1)
-
     employees = _category_employees(db, pattern, department_id)
 
     if not auto_stagger:
@@ -293,6 +320,8 @@ def staggered_cycle_fill(
             cell = existing.get(d)
             if cell is not None and cell.absence_code is not None:
                 continue
+            if cell is not None and cell.is_manual and not reset_manual:
+                continue  # preserve hand-set cells
             if cell is None:
                 cell = RosterAssignment(
                     employee_id=emp.id, work_date=d, created_by=created_by
@@ -301,8 +330,73 @@ def staggered_cycle_fill(
                 existing[d] = cell
             cell.shift_type_id = target
             cell.absence_code = None
+            cell.is_manual = False
             filled += 1
 
     db.commit()
     result["filled_cells"] = filled
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Per-employee cascade — re-derive ONE person's later days from a cell
+# --------------------------------------------------------------------------- #
+def cascade_employee(
+    db: Session,
+    pattern: RotationPattern,
+    employee_id: int,
+    from_date: date,
+    created_by: int,
+) -> dict:
+    """Re-derive an employee's days AFTER from_date by advancing the cycle from
+    the shift now on from_date. Other employees are untouched; absences kept."""
+    cycle = [s.shift_type_id for s in pattern.steps]
+    if not cycle:
+        return {"updated": 0}
+    cycle_len = len(cycle)
+    last_day = calendar.monthrange(from_date.year, from_date.month)[1]
+
+    seed = (
+        db.query(RosterAssignment)
+        .filter(
+            RosterAssignment.employee_id == employee_id,
+            RosterAssignment.work_date == from_date,
+        )
+        .first()
+    )
+    if not seed or seed.shift_type_id not in cycle:
+        return {"updated": 0}
+    phase = cycle.index(seed.shift_type_id)
+
+    existing = {
+        c.work_date: c
+        for c in db.query(RosterAssignment)
+        .filter(
+            RosterAssignment.employee_id == employee_id,
+            RosterAssignment.work_date > from_date,
+            RosterAssignment.work_date <= date(
+                from_date.year, from_date.month, last_day
+            ),
+        )
+        .all()
+    }
+
+    updated = 0
+    for day in range(from_date.day + 1, last_day + 1):
+        d = date(from_date.year, from_date.month, day)
+        target = cycle[(phase + (day - from_date.day)) % cycle_len]
+        cell = existing.get(d)
+        if cell is not None and cell.absence_code is not None:
+            continue  # never overwrite an absence
+        if cell is None:
+            cell = RosterAssignment(
+                employee_id=employee_id, work_date=d, created_by=created_by
+            )
+            db.add(cell)
+        cell.shift_type_id = target
+        cell.absence_code = None
+        cell.is_manual = False
+        updated += 1
+
+    db.commit()
+    return {"updated": updated}

@@ -17,6 +17,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     Enum,
@@ -74,6 +75,11 @@ class RosterAssignment(Base):
     )
 
     notes: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    is_manual: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        comment="True = set by hand; auto-fill preserves it as a fixed point",
+    )
     created_by: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -89,3 +95,27 @@ class RosterAssignment(Base):
     )
     shift_type = relationship("ShiftType", back_populates="assignments")
     site = relationship("Site")
+
+
+class RosterChangeLog(Base):
+    """Audit trail of roster modifications so the manager can review changes."""
+
+    __tablename__ = "roster_change_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    action: Mapped[str] = mapped_column(
+        String(30), comment="manual_set | manual_clear | auto_fill | cascade"
+    )
+    employee_name: Mapped[Optional[str]] = mapped_column(
+        String(200), nullable=True
+    )
+    work_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    detail: Mapped[str] = mapped_column(String(400))
+    changed_by: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )

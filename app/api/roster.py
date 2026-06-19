@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_edit
 from app.core.database import get_db
 from app.models.employee import Employee
-from app.models.roster import RosterAssignment
+from app.models.roster import RosterAssignment, RosterChangeLog
 from app.models.rotation import RotationPattern
 from app.models.shift_type import ShiftType
 from app.models.user import User
@@ -23,12 +23,37 @@ from app.schemas.roster import (
     EmployeeHours,
     SubstituteCandidate,
 )
-from app.schemas.rotation import AutoFillRequest, AutoFillResult
+from app.schemas.rotation import (
+    AutoFillRequest,
+    AutoFillResult,
+    CascadeRequest,
+    CascadeResult,
+    ChangeLogRead,
+)
 from app.services.hours_service import employee_hours_summary, month_bounds
-from app.services.rotation_service import auto_fill_month
+from app.services.rotation_service import auto_fill_month, cascade_employee
 from app.services.substitution_service import suggest_substitutes
 
 router = APIRouter(prefix="/roster", tags=["Roster"])
+
+
+def _log(
+    db: Session,
+    action: str,
+    detail: str,
+    user_id: int,
+    employee_name: str | None = None,
+    work_date=None,
+) -> None:
+    db.add(
+        RosterChangeLog(
+            action=action,
+            detail=detail,
+            employee_name=employee_name,
+            work_date=work_date,
+            changed_by=user_id,
+        )
+    )
 
 
 @router.get("", response_model=list[CellRead])
@@ -96,6 +121,19 @@ def upsert_cell(
     cell.site_id = body.site_id
     cell.substitutes_for_id = body.substitutes_for_id
     cell.notes = body.notes
+    cell.is_manual = True  # hand-set → auto-fill will preserve it
+
+    new_label = (
+        st.code if body.shift_type_id is not None else body.absence_code.value
+    )
+    _log(
+        db,
+        "manual_set",
+        f"Set {new_label}",
+        user.id,
+        employee_name=f"{emp.last_name} {emp.first_name}",
+        work_date=body.work_date,
+    )
 
     db.commit()
     db.refresh(cell)
@@ -118,7 +156,16 @@ def delete_cell(
         .first()
     )
     if cell:
+        emp = db.query(Employee).filter(Employee.id == employee_id).first()
         db.delete(cell)
+        _log(
+            db,
+            "manual_clear",
+            "Cleared cell",
+            _u.id,
+            employee_name=(f"{emp.last_name} {emp.first_name}" if emp else None),
+            work_date=work_date,
+        )
         db.commit()
 
 
@@ -128,11 +175,10 @@ def auto_fill(
     db: Session = Depends(get_db),
     user: User = Depends(require_edit),
 ):
-    """Propagate a rotation across the month from each employee's day-1 seed.
-
-    The manager sets day 1 for each employee first; this fills days 2..end by
-    advancing each through the cycle. Absences already entered are preserved.
-    Every cell remains editable afterwards (req: 'always modifiable')."""
+    """Auto-fill the month for a category. Manual edits and absences are kept
+    as fixed points (pass reset_manual=True to discard manual edits and refill
+    from scratch). The system reports gaps it can't staff; it never overrides a
+    human decision silently (req v2.0 §4)."""
     pattern = (
         db.query(RotationPattern)
         .filter(RotationPattern.id == body.pattern_id)
@@ -149,8 +195,68 @@ def auto_fill(
         user.id,
         body.department_id,
         auto_stagger=body.auto_stagger,
+        reset_manual=body.reset_manual,
     )
+    mode = "reset (manual edits cleared)" if body.reset_manual else "manual edits kept"
+    _log(
+        db,
+        "auto_fill",
+        f"Auto-fill {pattern.name} {body.year}-{body.month:02d} "
+        f"— {result['filled_cells']} cells, {mode}",
+        user.id,
+    )
+    db.commit()
     return AutoFillResult(**result)
+
+
+@router.post("/cascade", response_model=CascadeResult)
+def cascade(
+    body: CascadeRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_edit),
+):
+    """Re-derive ONE employee's later days from the (just-edited) cell, leaving
+    everyone else untouched. Uses the category's rotation cycle order."""
+    pattern = (
+        db.query(RotationPattern)
+        .filter(RotationPattern.id == body.pattern_id)
+        .first()
+    )
+    if not pattern:
+        raise HTTPException(status_code=404, detail="Rotation pattern not found")
+    emp = db.query(Employee).filter(Employee.id == body.employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    result = cascade_employee(
+        db, pattern, body.employee_id, body.work_date, user.id
+    )
+    _log(
+        db,
+        "cascade",
+        f"Cascaded {result['updated']} following day(s) from "
+        f"{body.work_date.isoformat()}",
+        user.id,
+        employee_name=f"{emp.last_name} {emp.first_name}",
+        work_date=body.work_date,
+    )
+    db.commit()
+    return CascadeResult(**result)
+
+
+@router.get("/history", response_model=list[ChangeLogRead])
+def get_history(
+    limit: int = Query(100, le=500),
+    db: Session = Depends(get_db),
+    _u: User = Depends(require_edit),
+):
+    """Most recent roster changes (manual edits, auto-fills, cascades)."""
+    return (
+        db.query(RosterChangeLog)
+        .order_by(RosterChangeLog.changed_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 @router.get("/substitutes", response_model=list[SubstituteCandidate])
