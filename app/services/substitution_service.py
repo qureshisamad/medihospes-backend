@@ -11,6 +11,10 @@ Eligibility (req v2.0 §1.4, §2.3):
   * Roles with no matching/coverage employee are effectively non-interchangeable
     and simply yield no candidates.
 
+Location (house): substitutes from the SAME house are preferred. Staff flagged
+flexible_location can also cover other houses and are marked is_cross_site.
+Employees at a different house who are not flexible are excluded.
+
 Availability: the candidate has no existing roster cell on that date.
 Overtime awareness (req v2.0 §2.3): if taking the shift would push the
 substitute past their monthly contractual limit, that is flagged so the manager
@@ -34,8 +38,12 @@ def suggest_substitutes(
     work_date: date,
     exclude_employee_id: int | None = None,
     shift_type_id: int | None = None,
+    site_id: int | None = None,
 ) -> list[dict]:
-    """Return eligible, available substitutes for `role` on `work_date`."""
+    """Return eligible, available substitutes for `role` on `work_date`.
+
+    `site_id` is the house of the gap being filled — same-house staff are
+    preferred and cross-house staff are only offered if flexible_location."""
     # Roles this candidate could cover via cross-role exception
     cross_role_ids = {
         r.employee_id
@@ -49,13 +57,12 @@ def suggest_substitutes(
         .filter(Employee.is_active.is_(True))
         .all()
     )
+    all_shift_types = {s.id: s for s in db.query(ShiftType).all()}
 
     # Hours the prospective shift would add (for overtime projection)
     added_hours = 0.0
-    if shift_type_id:
-        st = db.query(ShiftType).filter(ShiftType.id == shift_type_id).first()
-        if st:
-            added_hours = st.duration_hours
+    if shift_type_id and shift_type_id in all_shift_types:
+        added_hours = all_shift_types[shift_type_id].duration_hours or 0.0
 
     out: list[dict] = []
     for emp in candidates:
@@ -69,8 +76,18 @@ def suggest_substitutes(
             else:
                 continue  # role not interchangeable for this employee
 
-        # Availability: no existing cell that day
-        busy = (
+        # Location: same house preferred; other houses only if flexible.
+        is_cross_site = False
+        if site_id is not None and emp.site_id != site_id:
+            if emp.flexible_location:
+                is_cross_site = True
+            else:
+                continue  # belongs to a different house and can't cross
+
+        # Availability: free if they have no cell, or only a REST cell that day.
+        # (A rest-day person is the natural cover; a working shift or an absence
+        # means they can't take it.)
+        cell = (
             db.query(RosterAssignment)
             .filter(
                 RosterAssignment.employee_id == emp.id,
@@ -78,8 +95,14 @@ def suggest_substitutes(
             )
             .first()
         )
-        if busy:
-            continue
+        on_rest = False
+        if cell is not None:
+            if cell.absence_code is not None:
+                continue  # away (vacation/sick) — can't cover
+            st = all_shift_types.get(cell.shift_type_id)
+            if st and (st.duration_hours or 0) > 0:
+                continue  # already working a real shift
+            on_rest = True  # rest day → available to cover
 
         booked = worked_hours(db, emp.id, work_date.year, work_date.month)
         limit = emp.monthly_hour_limit or 0.0
@@ -92,6 +115,8 @@ def suggest_substitutes(
                 "name": f"{emp.first_name} {emp.last_name}",
                 "job_title": emp.job_title,
                 "is_cross_role": is_cross_role,
+                "is_cross_site": is_cross_site,
+                "on_rest": on_rest,
                 "booked_hours": booked,
                 "monthly_hour_limit": limit,
                 "remaining_hours": remaining,
@@ -99,6 +124,8 @@ def suggest_substitutes(
             }
         )
 
-    # Same-role first, then by most remaining capacity
-    out.sort(key=lambda c: (c["is_cross_role"], -c["remaining_hours"]))
+    # Same-house & same-role first, then by most remaining capacity
+    out.sort(
+        key=lambda c: (c["is_cross_site"], c["is_cross_role"], -c["remaining_hours"])
+    )
     return out

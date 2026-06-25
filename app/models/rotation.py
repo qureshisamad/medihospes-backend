@@ -41,6 +41,13 @@ class RotationPattern(Base):
     job_title: Mapped[str] = mapped_column(
         String(100), index=True, comment="Category this rotation applies to"
     )
+    site_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("sites.id"),
+        nullable=True,
+        index=True,
+        comment="House/location this rotation staffs (None = category-wide)",
+    )
     min_rest_hours: Mapped[float] = mapped_column(
         Float,
         default=11.0,
@@ -59,6 +66,7 @@ class RotationPattern(Base):
         back_populates="pattern",
         cascade="all, delete-orphan",
     )
+    site = relationship("Site")
 
 
 class RotationStep(Base):

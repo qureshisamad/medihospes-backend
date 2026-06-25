@@ -23,6 +23,8 @@ def _serialize(p: RotationPattern) -> RotationPatternRead:
         id=p.id,
         name=p.name,
         job_title=p.job_title,
+        site_id=p.site_id,
+        site_name=p.site.name if p.site else None,
         is_active=p.is_active,
         shift_type_ids=[s.shift_type_id for s in p.steps],
         min_rest_hours=p.min_rest_hours,
@@ -62,6 +64,7 @@ def _set_steps(pattern: RotationPattern, ids: list[int]) -> None:
 @router.get("", response_model=list[RotationPatternRead])
 def list_rotations(
     job_title: str | None = Query(None),
+    site_id: int | None = Query(None),
     is_active: bool | None = Query(None),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
@@ -69,6 +72,8 @@ def list_rotations(
     q = db.query(RotationPattern)
     if job_title:
         q = q.filter(RotationPattern.job_title == job_title)
+    if site_id is not None:
+        q = q.filter(RotationPattern.site_id == site_id)
     if is_active is not None:
         q = q.filter(RotationPattern.is_active == is_active)
     return [_serialize(p) for p in q.order_by(RotationPattern.name).all()]
@@ -86,6 +91,7 @@ def create_rotation(
     pattern = RotationPattern(
         name=body.name,
         job_title=body.job_title,
+        site_id=body.site_id,
         min_rest_hours=body.min_rest_hours,
     )
     _set_steps(pattern, body.shift_type_ids)
@@ -113,6 +119,8 @@ def update_rotation(
         pattern.name = body.name
     if body.job_title is not None:
         pattern.job_title = body.job_title
+    if "site_id" in body.model_fields_set:  # allow setting to null (category-wide)
+        pattern.site_id = body.site_id
     if body.is_active is not None:
         pattern.is_active = body.is_active
     if body.min_rest_hours is not None:

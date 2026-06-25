@@ -18,6 +18,7 @@ fill from scratch.
 """
 
 import calendar
+from collections import Counter, defaultdict, deque
 from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.orm import Session
@@ -37,6 +38,7 @@ def _empty_result():
         "skipped": [],
         "warnings": [],
         "unmet": [],
+        "alerts": [],
     }
 
 
@@ -49,10 +51,14 @@ def _end_dt(d: date, st: ShiftType) -> datetime:
 
 
 def _category_employees(db, pattern, department_id):
+    """Employees in the pattern's category — and, when the pattern is scoped to
+    a house (site_id), only the staff assigned to that house."""
     q = db.query(Employee).filter(
         Employee.is_active.is_(True),
         Employee.job_title == pattern.job_title,
     )
+    if pattern.site_id is not None:
+        q = q.filter(Employee.site_id == pattern.site_id)
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
     return q.order_by(Employee.last_name, Employee.first_name).all()
@@ -69,7 +75,7 @@ def auto_fill_month(
     reset_manual: bool = False,
 ) -> dict:
     if pattern.coverage:
-        return coverage_driven_fill(
+        return coverage_cycle_fill(
             db, pattern, year, month, created_by, department_id, reset_manual
         )
     return staggered_cycle_fill(
@@ -79,9 +85,52 @@ def auto_fill_month(
 
 
 # --------------------------------------------------------------------------- #
-# Coverage-driven, constraint-aware fill
+# Coverage-shaped rotating cycle
 # --------------------------------------------------------------------------- #
-def coverage_driven_fill(
+def build_cycle(pattern: RotationPattern, coverage: dict[int, int]) -> list[int]:
+    """The "specific time regulation": the pattern's step order with each shift
+    repeated by its coverage count. e.g. order M,P/N,S,R with coverage
+    1,2,3,4  ->  [M, P/N, P/N, S, S, S, R, R, R, R] (length = total = headcount).
+    R (rest) is a first-class part of the cycle, not an afterthought."""
+    cycle: list[int] = []
+    seen: set[int] = set()
+    for step in pattern.steps:  # ordered = regulated sequence
+        cnt = coverage.get(step.shift_type_id, 0)
+        cycle.extend([step.shift_type_id] * cnt)
+        seen.add(step.shift_type_id)
+    # Any coverage shift not in the step order is appended at the end.
+    for sid, cnt in coverage.items():
+        if sid not in seen:
+            cycle.extend([sid] * cnt)
+    return cycle
+
+
+def _assign_offsets(employees, cycle, seeds):
+    """Map each employee to a distinct starting offset in the cycle. Honour the
+    manager's day-1 seed where valid; auto-stagger the rest."""
+    pos_by_shift: dict[int, deque] = defaultdict(deque)
+    for idx, sid in enumerate(cycle):
+        pos_by_shift[sid].append(idx)
+
+    offsets: dict[int, int] = {}
+    used: set[int] = set()
+    unseeded = []
+    for e in employees:
+        s = seeds.get(e.id)
+        if s is not None and pos_by_shift.get(s):
+            off = pos_by_shift[s].popleft()
+            offsets[e.id] = off
+            used.add(off)
+        else:
+            unseeded.append(e)
+
+    remaining = deque(i for i in range(len(cycle)) if i not in used)
+    for e in unseeded:
+        offsets[e.id] = remaining.popleft() if remaining else 0
+    return offsets
+
+
+def coverage_cycle_fill(
     db: Session,
     pattern: RotationPattern,
     year: int,
@@ -94,22 +143,52 @@ def coverage_driven_fill(
     coverage = {c.shift_type_id: c.required_count for c in pattern.coverage}
     if not coverage:
         return result
-    shift_types = {
-        s.id: s for s in db.query(ShiftType).filter(ShiftType.id.in_(coverage)).all()
-    }
+
     all_shifts = {s.id: s for s in db.query(ShiftType).all()}
+    code = {sid: all_shifts[sid].code if sid in all_shifts else "?" for sid in coverage}
     min_rest = pattern.min_rest_hours or DEFAULT_MIN_REST_HOURS
+
+    cycle = build_cycle(pattern, coverage)
+    total = len(cycle)  # = sum of coverage counts
     last_day = calendar.monthrange(year, month)[1]
     first = date(year, month, 1)
     month_end = date(year, month, last_day)
 
     employees = _category_employees(db, pattern, department_id)
     if not employees:
+        result["alerts"].append("No active employees in this category.")
         return result
+    n = len(employees)
     emp_ids = [e.id for e in employees]
 
-    # Load existing cells; classify fixed (absence, or manual unless reset).
-    existing = (
+    # --- Alert 1: headcount must equal the coverage total (M+P/N+S+R) ---
+    if n != total:
+        result["alerts"].append(
+            f"Staff in this category: {n}, but the required total "
+            f"(M+P/N+S+R = {'+'.join(str(coverage[s]) for s in coverage)}) is "
+            f"{total}. Coverage will not balance — adjust the counts or the staff."
+        )
+
+    # --- Soft check: does the regulated order respect the rest rule? ---
+    for i in range(total):
+        a, b = all_shifts.get(cycle[i]), all_shifts.get(cycle[(i + 1) % total])
+        if a and b and cycle[i] != cycle[(i + 1) % total]:
+            gap = (
+                datetime.combine(date(2000, 1, 2), b.start_time or time(0, 0))
+                - (
+                    datetime.combine(date(2000, 1, 1), a.start_time or time(0, 0))
+                    + timedelta(hours=a.duration_hours or 0.0)
+                )
+            ).total_seconds() / 3600
+            if 0 <= gap < min_rest:
+                result["warnings"].append(
+                    f"Order {a.code}→{b.code} leaves only {gap:.0f}h rest "
+                    f"(min {min_rest:.0f}h) — check the shift sequence."
+                )
+                break
+
+    # --- Load existing cells; preserve absences and manual edits ---
+    existing_rows = (
         db.query(RosterAssignment)
         .filter(
             RosterAssignment.employee_id.in_(emp_ids),
@@ -118,15 +197,27 @@ def coverage_driven_fill(
         )
         .all()
     )
-    absent: dict[tuple[int, date], None] = {}
-    fixed_work: dict[tuple[int, date], int] = {}  # manual worked cells kept
-    for c in existing:
+    preserved: dict[tuple[int, date], int | None] = {}  # (emp,date) -> shift or None(absence)
+    seeds: dict[int, int] = {}
+    for c in existing_rows:
         if c.absence_code is not None:
-            absent[(c.employee_id, c.work_date)] = None
+            preserved[(c.employee_id, c.work_date)] = None
         elif c.is_manual and not reset_manual:
-            fixed_work[(c.employee_id, c.work_date)] = c.shift_type_id
+            preserved[(c.employee_id, c.work_date)] = c.shift_type_id
+            if c.work_date == first and c.shift_type_id in coverage:
+                seeds[c.employee_id] = c.shift_type_id
 
-    # Delete cells we are about to regenerate (auto always; manual if reset).
+    # --- Alert 2: a manager-initiated day-1 seed that doesn't match coverage ---
+    if seeds:
+        seed_counts = Counter(seeds.values())
+        for sid, req in coverage.items():
+            got = seed_counts.get(sid, 0)
+            if got != req:
+                result["alerts"].append(
+                    f"Day 1: {code[sid]} has {got}, expected {req}."
+                )
+
+    # Delete the cells we'll regenerate (auto always; manual only if reset).
     del_q = db.query(RosterAssignment).filter(
         RosterAssignment.employee_id.in_(emp_ids),
         RosterAssignment.work_date >= first,
@@ -137,109 +228,51 @@ def coverage_driven_fill(
         del_q = del_q.filter(RosterAssignment.is_manual.is_(False))
     del_q.delete(synchronize_session=False)
 
-    # Reserve hours for kept manual cells up front so auto stays within contract.
-    projected = {e.id: 0.0 for e in employees}
-    for (eid, d), sid in fixed_work.items():
-        st = all_shifts.get(sid)
-        if st:
-            projected[eid] += st.duration_hours or 0.0
-
-    last_end: dict[int, datetime | None] = {e.id: None for e in employees}
-
-    shift_order = sorted(
-        coverage.keys(),
-        key=lambda sid: shift_types[sid].start_time or time(0, 0),
-        reverse=True,
-    )
+    offsets = _assign_offsets(employees, cycle, seeds if not reset_manual else {})
 
     filled = 0
     filled_emps: set[int] = set()
+    # actual shift worked per (day -> shift -> count), to verify coverage
+    day_counts: dict[int, Counter] = defaultdict(Counter)
 
-    for day in range(1, last_day + 1):
-        d = date(year, month, day)
-        today_shift: dict[int, int] = {}  # emp -> shift worked today
-        assigned_today: set[int] = set()
-
-        # Apply kept manual cells for the day first.
-        for e in employees:
-            sid = fixed_work.get((e.id, d))
-            if sid is not None:
-                today_shift[e.id] = sid
-                assigned_today.add(e.id)
-
-        for sid in shift_order:
-            st = shift_types[sid]
-            already = sum(1 for e in employees if today_shift.get(e.id) == sid)
-            need = coverage[sid] - already
-            if need <= 0:
+    for e in employees:
+        off = offsets[e.id]
+        for day in range(1, last_day + 1):
+            d = date(year, month, day)
+            key = (e.id, d)
+            if key in preserved:
+                sid = preserved[key]
+                if sid is not None:
+                    day_counts[day][sid] += 1
+                continue  # keep absence / manual cell untouched
+            target = cycle[(off + (day - 1)) % total] if total else None
+            if target is None:
                 continue
-            start = _start_dt(d, st)
-            end = _end_dt(d, st)
-
-            pool = []
-            for e in employees:
-                if (e.id, d) in absent or e.id in assigned_today:
-                    continue
-                le = last_end[e.id]
-                if le is not None and (start - le) < timedelta(hours=min_rest):
-                    continue
-                # forward: respect a fixed shift the employee already has tomorrow
-                nxt = fixed_work.get((e.id, d + timedelta(days=1)))
-                if nxt is not None:
-                    nstart = _start_dt(d + timedelta(days=1), all_shifts[nxt])
-                    if (nstart - end) < timedelta(hours=min_rest):
-                        continue
-                if projected[e.id] + (st.duration_hours or 0.0) > (
-                    e.monthly_hour_limit or 0.0
-                ) + 1e-6:
-                    continue
-                pool.append(e)
-
-            pool.sort(key=lambda e: (projected[e.id], e.last_name, e.first_name))
-
-            placed = 0
-            for e in pool:
-                if placed >= need:
-                    break
-                db.add(
-                    RosterAssignment(
-                        employee_id=e.id,
-                        work_date=d,
-                        shift_type_id=sid,
-                        created_by=created_by,
-                        is_manual=False,
-                    )
+            db.add(
+                RosterAssignment(
+                    employee_id=e.id,
+                    work_date=d,
+                    shift_type_id=target,
+                    created_by=created_by,
+                    is_manual=False,
                 )
-                projected[e.id] += st.duration_hours or 0.0
-                today_shift[e.id] = sid
-                assigned_today.add(e.id)
-                filled_emps.add(e.id)
-                filled += 1
-                placed += 1
-
-            if placed < need:
-                result["unmet"].append(
-                    f"{d.isoformat()} {st.code}: {need - placed} of "
-                    f"{coverage[sid]} unfilled (no staff within rest/hours limits)"
-                )
-
-        # End of day: roll rest state forward.
-        for e in employees:
-            sid = today_shift.get(e.id)
-            if sid is not None:
-                last_end[e.id] = _end_dt(d, all_shifts[sid])
-            else:
-                last_end[e.id] = None  # off / absent clears the rest gap
+            )
+            day_counts[day][target] += 1
+            filled += 1
+            filled_emps.add(e.id)
 
     db.commit()
 
-    for e in employees:
-        limit = e.monthly_hour_limit or 0.0
-        if limit and projected[e.id] < limit * 0.5:
-            result["warnings"].append(
-                f"{e.last_name} {e.first_name}: only {projected[e.id]:.1f}h "
-                f"scheduled of {limit:.0f}h contract"
-            )
+    # --- Per-day coverage shortfalls (e.g. caused by an absence) ---
+    for day in range(1, last_day + 1):
+        for sid, req in coverage.items():
+            got = day_counts[day][sid]
+            if got < req:
+                d = date(year, month, day)
+                result["unmet"].append(
+                    f"{d.isoformat()} {code[sid]}: {got} of {req} "
+                    f"(short {req - got})"
+                )
 
     result["filled_cells"] = filled
     result["employees_filled"] = len(filled_emps)

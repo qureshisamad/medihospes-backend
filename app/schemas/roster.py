@@ -49,6 +49,8 @@ class SubstituteCandidate(BaseModel):
     name: str
     job_title: str
     is_cross_role: bool
+    is_cross_site: bool = False
+    on_rest: bool = False
     booked_hours: float
     monthly_hour_limit: float
     remaining_hours: float

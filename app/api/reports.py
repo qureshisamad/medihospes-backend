@@ -28,7 +28,14 @@ from app.services.hours_service import employee_hours_summary, month_bounds
 router = APIRouter(prefix="/reports", tags=["Reports & Export"])
 
 
-def _build_grid(db: Session, year: int, month: int, department_id: int | None):
+def _build_grid(
+    db: Session,
+    year: int,
+    month: int,
+    department_id: int | None,
+    job_title: str | None = None,
+    site_id: int | None = None,
+):
     """Return (employees, days, cell_map) where cell_map[(emp_id, day)] = label."""
     start, end = month_bounds(year, month)
     days = list(range(1, calendar.monthrange(year, month)[1] + 1))
@@ -36,6 +43,10 @@ def _build_grid(db: Session, year: int, month: int, department_id: int | None):
     eq = db.query(Employee).filter(Employee.is_active.is_(True))
     if department_id is not None:
         eq = eq.filter(Employee.department_id == department_id)
+    if job_title is not None:
+        eq = eq.filter(Employee.job_title == job_title)
+    if site_id is not None:
+        eq = eq.filter(Employee.site_id == site_id)
     employees = eq.order_by(Employee.last_name, Employee.first_name).all()
 
     shift_codes = {s.id: s.code for s in db.query(ShiftType).all()}
@@ -82,13 +93,17 @@ def export_roster_xlsx(
     year: int = Query(...),
     month: int = Query(..., ge=1, le=12),
     department_id: int | None = Query(None),
+    job_title: str | None = Query(None),
+    site_id: int | None = Query(None),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
 ):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
 
-    employees, days, cell_map = _build_grid(db, year, month, department_id)
+    employees, days, cell_map = _build_grid(
+        db, year, month, department_id, job_title, site_id
+    )
 
     wb = Workbook()
     ws = wb.active
@@ -133,6 +148,8 @@ def export_roster_pdf(
     year: int = Query(...),
     month: int = Query(..., ge=1, le=12),
     department_id: int | None = Query(None),
+    job_title: str | None = Query(None),
+    site_id: int | None = Query(None),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
 ):
@@ -149,7 +166,9 @@ def export_roster_pdf(
     )
     from reportlab.lib.styles import getSampleStyleSheet
 
-    employees, days, cell_map = _build_grid(db, year, month, department_id)
+    employees, days, cell_map = _build_grid(
+        db, year, month, department_id, job_title, site_id
+    )
     styles = getSampleStyleSheet()
 
     # Page geometry — landscape A4 with tight margins.

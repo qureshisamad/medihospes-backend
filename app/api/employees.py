@@ -41,6 +41,7 @@ def _serialize(emp: Employee) -> EmployeeRead:
 def list_employees(
     department_id: int | None = Query(None),
     job_title: str | None = Query(None),
+    site_id: int | None = Query(None),
     is_active: bool | None = Query(None),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
@@ -50,6 +51,8 @@ def list_employees(
         q = q.filter(Employee.department_id == department_id)
     if job_title is not None:
         q = q.filter(Employee.job_title == job_title)
+    if site_id is not None:
+        q = q.filter(Employee.site_id == site_id)
     if is_active is not None:
         q = q.filter(Employee.is_active == is_active)
     employees = q.order_by(Employee.last_name, Employee.first_name).all()

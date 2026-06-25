@@ -20,6 +20,7 @@ class CoverageItem(BaseModel):
 class RotationPatternCreate(BaseModel):
     name: str
     job_title: str
+    site_id: int | None = None  # house this rotation staffs (None = category-wide)
     # Ordered cycle: shift_type_id at each position (index = position)
     shift_type_ids: list[int]
     min_rest_hours: float = 11.0
@@ -29,6 +30,7 @@ class RotationPatternCreate(BaseModel):
 class RotationPatternUpdate(BaseModel):
     name: str | None = None
     job_title: str | None = None
+    site_id: int | None = None
     is_active: bool | None = None
     shift_type_ids: list[int] | None = None
     min_rest_hours: float | None = None
@@ -39,6 +41,8 @@ class RotationPatternRead(BaseModel):
     id: int
     name: str
     job_title: str
+    site_id: int | None
+    site_name: str | None
     is_active: bool
     shift_type_ids: list[int]
     min_rest_hours: float
@@ -85,5 +89,6 @@ class AutoFillResult(BaseModel):
     filled_cells: int
     employees_filled: int
     skipped: list[str]      # cycle mode: employees with no valid day-1 seed
-    warnings: list[str]     # e.g. under-utilised staff, duplicate day-1 shifts
-    unmet: list[str]        # coverage mode: shifts that couldn't be staffed
+    warnings: list[str]     # e.g. shift-order rest check
+    unmet: list[str]        # per-day coverage shortfalls (e.g. from absences)
+    alerts: list[str] = []  # manager-facing: headcount≠total, bad day-1 seed

@@ -62,21 +62,24 @@ def get_roster(
     month: int = Query(..., ge=1, le=12),
     department_id: int | None = Query(None),
     job_title: str | None = Query(None),
+    site_id: int | None = Query(None),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
 ):
-    """Return every roster cell for the given month (optionally one dept/role)."""
+    """Return every roster cell for the month (optionally one dept/role/house)."""
     start, end = month_bounds(year, month)
     q = db.query(RosterAssignment).filter(
         RosterAssignment.work_date >= start,
         RosterAssignment.work_date <= end,
     )
-    if department_id is not None or job_title is not None:
+    if department_id is not None or job_title is not None or site_id is not None:
         q = q.join(Employee, Employee.id == RosterAssignment.employee_id)
         if department_id is not None:
             q = q.filter(Employee.department_id == department_id)
         if job_title is not None:
             q = q.filter(Employee.job_title == job_title)
+        if site_id is not None:
+            q = q.filter(Employee.site_id == site_id)
     return q.order_by(RosterAssignment.work_date).all()
 
 
@@ -167,6 +170,61 @@ def delete_cell(
             work_date=work_date,
         )
         db.commit()
+
+
+@router.delete("/month")
+def clear_month(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    department_id: int | None = Query(None),
+    job_title: str | None = Query(None),
+    site_id: int | None = Query(None),
+    keep_absences: bool = Query(
+        False, description="If true, keep absence cells (vacation/sick/etc.)"
+    ),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_edit),
+):
+    """Clear every roster cell for the month within the current scope
+    (optional department/category/house). Use keep_absences to preserve entered
+    vacations/sick leave. Logged so the action is auditable."""
+    start, end = month_bounds(year, month)
+    q = db.query(RosterAssignment).filter(
+        RosterAssignment.work_date >= start,
+        RosterAssignment.work_date <= end,
+    )
+    if department_id is not None or job_title is not None or site_id is not None:
+        emp_ids = db.query(Employee.id)
+        if department_id is not None:
+            emp_ids = emp_ids.filter(Employee.department_id == department_id)
+        if job_title is not None:
+            emp_ids = emp_ids.filter(Employee.job_title == job_title)
+        if site_id is not None:
+            emp_ids = emp_ids.filter(Employee.site_id == site_id)
+        q = q.filter(RosterAssignment.employee_id.in_(emp_ids.subquery()))
+    if keep_absences:
+        q = q.filter(RosterAssignment.absence_code.is_(None))
+
+    count = q.count()
+    q.delete(synchronize_session=False)
+
+    scope = []
+    if department_id is not None:
+        scope.append(f"dept {department_id}")
+    if job_title is not None:
+        scope.append(job_title)
+    if site_id is not None:
+        scope.append(f"site {site_id}")
+    _log(
+        db,
+        "clear_month",
+        f"Cleared {count} cells for {year}-{month:02d}"
+        + (f" ({', '.join(scope)})" if scope else "")
+        + (" — absences kept" if keep_absences else ""),
+        user.id,
+    )
+    db.commit()
+    return {"cleared": count}
 
 
 @router.post("/auto-fill", response_model=AutoFillResult)
@@ -265,13 +323,15 @@ def get_substitutes(
     work_date: date = Query(...),
     exclude_employee_id: int | None = Query(None),
     shift_type_id: int | None = Query(None),
+    site_id: int | None = Query(None, description="House of the gap to fill"),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
 ):
     """Suggest valid, available substitutes — the manager picks one. The system
-    never auto-assigns (req v2.0 §4)."""
+    never auto-assigns (req v2.0 §4). Same-house staff first; flexible-location
+    staff offered as cross-house."""
     return suggest_substitutes(
-        db, role, work_date, exclude_employee_id, shift_type_id
+        db, role, work_date, exclude_employee_id, shift_type_id, site_id
     )
 
 
