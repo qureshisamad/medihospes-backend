@@ -29,6 +29,7 @@ from app.schemas.rotation import (
     CascadeRequest,
     CascadeResult,
     ChangeLogRead,
+    SwapRequest,
 )
 from app.services.hours_service import employee_hours_summary, month_bounds
 from app.services.rotation_service import auto_fill_month, cascade_employee
@@ -265,6 +266,73 @@ def auto_fill(
     )
     db.commit()
     return AutoFillResult(**result)
+
+
+def _set_cell(db, employee_id, work_date, shift_id, absence, user_id):
+    """Upsert a cell's content, or delete it when both are empty. Marks manual."""
+    cell = (
+        db.query(RosterAssignment)
+        .filter(
+            RosterAssignment.employee_id == employee_id,
+            RosterAssignment.work_date == work_date,
+        )
+        .first()
+    )
+    if shift_id is None and absence is None:
+        if cell:
+            db.delete(cell)
+        return
+    if not cell:
+        cell = RosterAssignment(
+            employee_id=employee_id, work_date=work_date, created_by=user_id
+        )
+        db.add(cell)
+    cell.shift_type_id = shift_id
+    cell.absence_code = absence
+    cell.is_manual = True
+
+
+@router.post("/swap")
+def swap_cells(
+    body: SwapRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_edit),
+):
+    """Exchange two employees' cells on a day. Used to give a shift to one
+    employee without leaving it on the other (keeps coverage balanced)."""
+    emp_a = db.query(Employee).filter(Employee.id == body.employee_a_id).first()
+    emp_b = db.query(Employee).filter(Employee.id == body.employee_b_id).first()
+    if not emp_a or not emp_b:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    def _content(emp_id):
+        c = (
+            db.query(RosterAssignment)
+            .filter(
+                RosterAssignment.employee_id == emp_id,
+                RosterAssignment.work_date == body.work_date,
+            )
+            .first()
+        )
+        return (c.shift_type_id, c.absence_code) if c else (None, None)
+
+    a_shift, a_abs = _content(body.employee_a_id)
+    b_shift, b_abs = _content(body.employee_b_id)
+
+    # Exchange: A gets B's content, B gets A's content.
+    _set_cell(db, body.employee_a_id, body.work_date, b_shift, b_abs, user.id)
+    _set_cell(db, body.employee_b_id, body.work_date, a_shift, a_abs, user.id)
+
+    _log(
+        db,
+        "swap",
+        f"Swapped shifts with {emp_a.last_name} {emp_a.first_name}",
+        user.id,
+        employee_name=f"{emp_b.last_name} {emp_b.first_name}",
+        work_date=body.work_date,
+    )
+    db.commit()
+    return {"swapped": True}
 
 
 @router.post("/cascade", response_model=CascadeResult)

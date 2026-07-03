@@ -74,6 +74,15 @@ class CascadeResult(BaseModel):
     updated: int
 
 
+class SwapRequest(BaseModel):
+    """Exchange two employees' cells on a day (assign a shift to one without
+    leaving it on the other — keeps coverage balanced)."""
+
+    employee_a_id: int
+    employee_b_id: int
+    work_date: date
+
+
 class ChangeLogRead(BaseModel):
     id: int
     action: str
