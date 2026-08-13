@@ -8,8 +8,9 @@ from app.models.roster import AbsenceCode
 
 
 class CellUpsert(BaseModel):
-    """Assign or update one roster cell. Exactly one of shift_type_id /
-    absence_code must be provided (a cell is either worked or an absence)."""
+    """Assign or update one roster cell. At most one of shift_type_id /
+    absence_code (a cell is either worked or an absence). A cell may also hold
+    just a free-text note (comment) with no shift or absence."""
 
     employee_id: int
     work_date: date
@@ -20,11 +21,18 @@ class CellUpsert(BaseModel):
     notes: str | None = None
 
     @model_validator(mode="after")
-    def _exactly_one(self):
-        if bool(self.shift_type_id) == bool(self.absence_code):
+    def _valid_combo(self):
+        if self.shift_type_id is not None and self.absence_code is not None:
             raise ValueError(
-                "Provide exactly one of shift_type_id or absence_code"
+                "Provide only one of shift_type_id or absence_code"
             )
+        # A cell must carry something: a shift, an absence, or a note.
+        if (
+            self.shift_type_id is None
+            and self.absence_code is None
+            and not (self.notes and self.notes.strip())
+        ):
+            raise ValueError("Provide a shift, an absence, or a note")
         return self
 
 

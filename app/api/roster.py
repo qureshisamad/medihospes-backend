@@ -125,15 +125,22 @@ def upsert_cell(
     cell.site_id = body.site_id
     cell.substitutes_for_id = body.substitutes_for_id
     cell.notes = body.notes
-    cell.is_manual = True  # hand-set → auto-fill will preserve it
+    # A shift/absence is a scheduling decision → lock it as a manual fixed point.
+    # A note-only edit is just an annotation and must NOT lock an auto-filled
+    # cell's shift, so leave is_manual untouched in that case.
+    if body.shift_type_id is not None or body.absence_code is not None:
+        cell.is_manual = True
 
-    new_label = (
-        st.code if body.shift_type_id is not None else body.absence_code.value
-    )
+    if body.shift_type_id is not None:
+        detail = f"Set {st.code}"
+    elif body.absence_code is not None:
+        detail = f"Set {body.absence_code.value}"
+    else:
+        detail = "Set note"
     _log(
         db,
         "manual_set",
-        f"Set {new_label}",
+        detail,
         user.id,
         employee_name=f"{emp.last_name} {emp.first_name}",
         work_date=body.work_date,
