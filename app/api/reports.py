@@ -15,6 +15,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_edit
@@ -50,10 +51,19 @@ def _build_grid(
     if job_title is not None:
         eq = eq.filter(Employee.job_title == job_title)
     if site_id is not None:
-        eq = eq.filter(Employee.site_id == site_id)
+        # Include operators on loan INTO this house (part 2), same as the API.
+        onloan_ids = db.query(RosterAssignment.employee_id).filter(
+            RosterAssignment.site_id == site_id,
+            RosterAssignment.work_date >= start,
+            RosterAssignment.work_date <= end,
+        )
+        eq = eq.filter(
+            or_(Employee.site_id == site_id, Employee.id.in_(onloan_ids))
+        )
     employees = eq.order_by(Employee.last_name, Employee.first_name).all()
 
     shift_codes = {s.id: s.code for s in db.query(ShiftType).all()}
+    home_site = {e.id: e.site_id for e in employees}
 
     cells = (
         db.query(RosterAssignment)
@@ -65,12 +75,34 @@ def _build_grid(
     )
     cell_map: dict[tuple[int, int], str] = {}
     for c in cells:
-        if c.shift_type_id:
-            label = shift_codes.get(c.shift_type_id, "?")
-        elif c.absence_code:
-            label = c.absence_code.value
+        if site_id is not None:
+            emp_home = home_site.get(c.employee_id)
+            transferred_out = (
+                emp_home == site_id
+                and c.site_id is not None
+                and c.site_id != site_id
+            )
+            effective = c.site_id if c.site_id is not None else emp_home
+            if transferred_out:
+                label = "B2"  # on loan to another house that day
+            elif effective == site_id:
+                if c.shift_type_id:
+                    label = shift_codes.get(c.shift_type_id, "?")
+                    if emp_home != site_id:
+                        label += "*"  # on loan into this house
+                elif c.absence_code:
+                    label = c.absence_code.value
+                else:
+                    label = ""
+            else:
+                continue  # cell belongs to a house we're not exporting
         else:
-            label = ""
+            if c.shift_type_id:
+                label = shift_codes.get(c.shift_type_id, "?")
+            elif c.absence_code:
+                label = c.absence_code.value
+            else:
+                label = ""
         cell_map[(c.employee_id, c.work_date.day)] = label
     return employees, days, cell_map
 

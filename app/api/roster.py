@@ -8,6 +8,7 @@ hand. The system validates and calculates but never assigns anyone itself
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_edit
@@ -80,7 +81,16 @@ def get_roster(
         if job_title is not None:
             q = q.filter(Employee.job_title == job_title)
         if site_id is not None:
-            q = q.filter(Employee.site_id == site_id)
+            # A house's grid includes its home operators' cells AND any cell an
+            # operator from another house works here (per-cell site override,
+            # objective 3 part 2). A home operator transferred out keeps their
+            # cell (rendered as B2) because Employee.site_id still matches.
+            q = q.filter(
+                or_(
+                    Employee.site_id == site_id,
+                    RosterAssignment.site_id == site_id,
+                )
+            )
     return q.order_by(RosterAssignment.work_date).all()
 
 

@@ -5,14 +5,17 @@ of people who appear on the roster (req v2.0 §1.2, §1.4).
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_edit
 from app.core.database import get_db
 from app.models.coverage import EmployeeCoverage
 from app.models.employee import Employee
+from app.models.roster import RosterAssignment
 from app.models.user import User
 from app.schemas.employee import EmployeeCreate, EmployeeRead, EmployeeUpdate
+from app.services.hours_service import month_bounds
 
 router = APIRouter(prefix="/employees", tags=["Employees"])
 
@@ -43,18 +46,35 @@ def list_employees(
     job_title: str | None = Query(None),
     site_id: int | None = Query(None),
     is_active: bool | None = Query(None),
+    year: int | None = Query(None),
+    month: int | None = Query(None, ge=1, le=12),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
 ):
+    """List employees. When ``site_id`` is combined with ``year``+``month``, the
+    result also includes operators on loan INTO that house that month (a cell
+    with a per-cell ``site_id`` override to this house) so they appear as rows
+    in the receiving house's roster grid (objective 3, part 2)."""
     q = db.query(Employee)
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
     if job_title is not None:
         q = q.filter(Employee.job_title == job_title)
-    if site_id is not None:
-        q = q.filter(Employee.site_id == site_id)
     if is_active is not None:
         q = q.filter(Employee.is_active == is_active)
+    if site_id is not None:
+        if year is not None and month is not None:
+            start, end = month_bounds(year, month)
+            onloan_ids = db.query(RosterAssignment.employee_id).filter(
+                RosterAssignment.site_id == site_id,
+                RosterAssignment.work_date >= start,
+                RosterAssignment.work_date <= end,
+            )
+            q = q.filter(
+                or_(Employee.site_id == site_id, Employee.id.in_(onloan_ids))
+            )
+        else:
+            q = q.filter(Employee.site_id == site_id)
     employees = q.order_by(Employee.last_name, Employee.first_name).all()
     return [_serialize(e) for e in employees]
 
