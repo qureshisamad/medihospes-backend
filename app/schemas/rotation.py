@@ -60,6 +60,9 @@ class AutoFillRequest(BaseModel):
     auto_stagger: bool = True
     # True = discard manual edits and fill from scratch. Default keeps them.
     reset_manual: bool = False
+    # Surplus staff to bench as "pending" (excluded from the rotation) when the
+    # house has more people than the coverage total needs (objective: pending).
+    pending_employee_ids: list[int] = []
 
 
 class CascadeRequest(BaseModel):

@@ -134,17 +134,24 @@ def upsert_cell(
     cell.absence_code = body.absence_code
     cell.site_id = body.site_id
     cell.substitutes_for_id = body.substitutes_for_id
+    cell.is_pending = body.is_pending
     cell.notes = body.notes
-    # A shift/absence is a scheduling decision → lock it as a manual fixed point.
-    # A note-only edit is just an annotation and must NOT lock an auto-filled
-    # cell's shift, so leave is_manual untouched in that case.
-    if body.shift_type_id is not None or body.absence_code is not None:
+    # A shift/absence/pending is a scheduling decision → lock it as a manual
+    # fixed point. A note-only edit is just an annotation and must NOT lock an
+    # auto-filled cell, so leave is_manual untouched in that case.
+    if (
+        body.shift_type_id is not None
+        or body.absence_code is not None
+        or body.is_pending
+    ):
         cell.is_manual = True
 
     if body.shift_type_id is not None:
         detail = f"Set {st.code}"
     elif body.absence_code is not None:
         detail = f"Set {body.absence_code.value}"
+    elif body.is_pending:
+        detail = "Set pending"
     else:
         detail = "Set note"
     _log(
@@ -272,6 +279,7 @@ def auto_fill(
         body.department_id,
         auto_stagger=body.auto_stagger,
         reset_manual=body.reset_manual,
+        pending_ids=body.pending_employee_ids,
     )
     mode = "reset (manual edits cleared)" if body.reset_manual else "manual edits kept"
     _log(

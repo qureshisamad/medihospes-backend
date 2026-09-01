@@ -18,6 +18,7 @@ class CellUpsert(BaseModel):
     absence_code: AbsenceCode | None = None
     site_id: int | None = None
     substitutes_for_id: int | None = None
+    is_pending: bool = False
     notes: str | None = None
 
     @model_validator(mode="after")
@@ -26,13 +27,22 @@ class CellUpsert(BaseModel):
             raise ValueError(
                 "Provide only one of shift_type_id or absence_code"
             )
-        # A cell must carry something: a shift, an absence, or a note.
+        if self.is_pending and (
+            self.shift_type_id is not None or self.absence_code is not None
+        ):
+            raise ValueError(
+                "A pending cell cannot also have a shift or absence"
+            )
+        # A cell must carry something: a shift, an absence, a pending mark, or a note.
         if (
             self.shift_type_id is None
             and self.absence_code is None
+            and not self.is_pending
             and not (self.notes and self.notes.strip())
         ):
-            raise ValueError("Provide a shift, an absence, or a note")
+            raise ValueError(
+                "Provide a shift, an absence, a pending mark, or a note"
+            )
         return self
 
 
@@ -44,6 +54,7 @@ class CellRead(BaseModel):
     absence_code: AbsenceCode | None
     site_id: int | None
     substitutes_for_id: int | None
+    is_pending: bool
     notes: str | None
     created_at: datetime
 

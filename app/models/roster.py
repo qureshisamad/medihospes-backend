@@ -80,6 +80,15 @@ class RosterAssignment(Base):
         default=False,
         comment="True = set by hand; auto-fill preserves it as a fixed point",
     )
+    is_pending: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        comment=(
+            "True = surplus staff benched this day (not in the rotation, 0h, "
+            "not counted toward coverage). shift_type_id/absence_code stay NULL."
+        ),
+    )
     created_by: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

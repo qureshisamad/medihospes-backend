@@ -86,7 +86,9 @@ def _build_grid(
             if transferred_out:
                 label = "B2"  # on loan to another house that day
             elif effective == site_id:
-                if c.shift_type_id:
+                if c.is_pending:
+                    label = "Pend"  # benched surplus (not in rotation)
+                elif c.shift_type_id:
                     label = shift_codes.get(c.shift_type_id, "?")
                     if emp_home != site_id:
                         label += "*"  # on loan into this house
@@ -97,7 +99,9 @@ def _build_grid(
             else:
                 continue  # cell belongs to a house we're not exporting
         else:
-            if c.shift_type_id:
+            if c.is_pending:
+                label = "Pend"
+            elif c.shift_type_id:
                 label = shift_codes.get(c.shift_type_id, "?")
             elif c.absence_code:
                 label = c.absence_code.value

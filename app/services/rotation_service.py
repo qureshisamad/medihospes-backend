@@ -73,10 +73,12 @@ def auto_fill_month(
     department_id: int | None = None,
     auto_stagger: bool = True,
     reset_manual: bool = False,
+    pending_ids: list[int] | None = None,
 ) -> dict:
     if pattern.coverage:
         return coverage_cycle_fill(
-            db, pattern, year, month, created_by, department_id, reset_manual
+            db, pattern, year, month, created_by, department_id, reset_manual,
+            pending_ids or [],
         )
     return staggered_cycle_fill(
         db, pattern, year, month, created_by, department_id, auto_stagger,
@@ -138,6 +140,7 @@ def coverage_cycle_fill(
     created_by: int,
     department_id: int | None = None,
     reset_manual: bool = False,
+    pending_ids: list[int] | None = None,
 ) -> dict:
     result = _empty_result()
     coverage = {c.shift_type_id: c.required_count for c in pattern.coverage}
@@ -161,12 +164,23 @@ def coverage_cycle_fill(
     n = len(employees)
     emp_ids = [e.id for e in employees]
 
-    # --- Alert 1: headcount must equal the coverage total (M+P/N+S+R) ---
-    if n != total:
+    # Split off any staff the manager benched as "pending" — they sit out the
+    # rotation (0h, not counted) so the remaining WORKING staff exactly fill the
+    # coverage total. The pending choice is the manager's (surplus balancing).
+    pending_set = {i for i in (pending_ids or []) if i in set(emp_ids)}
+    working = [e for e in employees if e.id not in pending_set]
+    pending_emps = [e for e in employees if e.id in pending_set]
+
+    # --- Alert 1: working headcount must equal the coverage total (M+P/N+S+R) ---
+    if len(working) != total:
+        surplus_note = (
+            f" ({len(pending_emps)} pending)" if pending_emps else ""
+        )
         result["alerts"].append(
-            f"Staff in this category: {n}, but the required total "
+            f"Working staff{surplus_note}: {len(working)}, but the required total "
             f"(M+P/N+S+R = {'+'.join(str(coverage[s]) for s in coverage)}) is "
-            f"{total}. Coverage will not balance — adjust the counts or the staff."
+            f"{total}. Coverage will not balance — adjust the counts, the staff, "
+            f"or who is pending."
         )
 
     # --- Soft check: does the regulated order respect the rest rule? ---
@@ -228,14 +242,14 @@ def coverage_cycle_fill(
         del_q = del_q.filter(RosterAssignment.is_manual.is_(False))
     del_q.delete(synchronize_session=False)
 
-    offsets = _assign_offsets(employees, cycle, seeds if not reset_manual else {})
+    offsets = _assign_offsets(working, cycle, seeds if not reset_manual else {})
 
     filled = 0
     filled_emps: set[int] = set()
     # actual shift worked per (day -> shift -> count), to verify coverage
     day_counts: dict[int, Counter] = defaultdict(Counter)
 
-    for e in employees:
+    for e in working:
         off = offsets[e.id]
         for day in range(1, last_day + 1):
             d = date(year, month, day)
@@ -258,6 +272,24 @@ def coverage_cycle_fill(
                 )
             )
             day_counts[day][target] += 1
+            filled += 1
+            filled_emps.add(e.id)
+
+    # Benched staff: write a pending cell for every non-preserved day.
+    for e in pending_emps:
+        for day in range(1, last_day + 1):
+            d = date(year, month, day)
+            if (e.id, d) in preserved:
+                continue  # keep a hand-set shift/absence on a pending person
+            db.add(
+                RosterAssignment(
+                    employee_id=e.id,
+                    work_date=d,
+                    is_pending=True,
+                    created_by=created_by,
+                    is_manual=False,
+                )
+            )
             filled += 1
             filled_emps.add(e.id)
 
