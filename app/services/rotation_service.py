@@ -23,6 +23,7 @@ from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import DEFAULT_LOCALE, tr
 from app.models.employee import Employee
 from app.models.roster import RosterAssignment
 from app.models.rotation import RotationPattern
@@ -74,15 +75,16 @@ def auto_fill_month(
     auto_stagger: bool = True,
     reset_manual: bool = False,
     pending_ids: list[int] | None = None,
+    locale: str = DEFAULT_LOCALE,
 ) -> dict:
     if pattern.coverage:
         return coverage_cycle_fill(
             db, pattern, year, month, created_by, department_id, reset_manual,
-            pending_ids or [],
+            pending_ids or [], locale,
         )
     return staggered_cycle_fill(
         db, pattern, year, month, created_by, department_id, auto_stagger,
-        reset_manual,
+        reset_manual, locale,
     )
 
 
@@ -141,6 +143,7 @@ def coverage_cycle_fill(
     department_id: int | None = None,
     reset_manual: bool = False,
     pending_ids: list[int] | None = None,
+    locale: str = DEFAULT_LOCALE,
 ) -> dict:
     result = _empty_result()
     coverage = {c.shift_type_id: c.required_count for c in pattern.coverage}
@@ -159,7 +162,7 @@ def coverage_cycle_fill(
 
     employees = _category_employees(db, pattern, department_id)
     if not employees:
-        result["alerts"].append("No active employees in this category.")
+        result["alerts"].append(tr("af.no_active", locale))
         return result
     n = len(employees)
     emp_ids = [e.id for e in employees]
@@ -174,13 +177,19 @@ def coverage_cycle_fill(
     # --- Alert 1: working headcount must equal the coverage total (M+P/N+S+R) ---
     if len(working) != total:
         surplus_note = (
-            f" ({len(pending_emps)} pending)" if pending_emps else ""
+            tr("af.pending_note", locale, count=len(pending_emps))
+            if pending_emps
+            else ""
         )
         result["alerts"].append(
-            f"Working staff{surplus_note}: {len(working)}, but the required total "
-            f"(M+P/N+S+R = {'+'.join(str(coverage[s]) for s in coverage)}) is "
-            f"{total}. Coverage will not balance — adjust the counts, the staff, "
-            f"or who is pending."
+            tr(
+                "af.imbalance",
+                locale,
+                pending=surplus_note,
+                working=len(working),
+                formula="+".join(str(coverage[s]) for s in coverage),
+                total=total,
+            )
         )
 
     # --- Soft check: does the regulated order respect the rest rule? ---
@@ -196,8 +205,14 @@ def coverage_cycle_fill(
             ).total_seconds() / 3600
             if 0 <= gap < min_rest:
                 result["warnings"].append(
-                    f"Order {a.code}→{b.code} leaves only {gap:.0f}h rest "
-                    f"(min {min_rest:.0f}h) — check the shift sequence."
+                    tr(
+                        "af.rest_gap",
+                        locale,
+                        a=a.code,
+                        b=b.code,
+                        gap=gap,
+                        min_rest=min_rest,
+                    )
                 )
                 break
 
@@ -228,7 +243,7 @@ def coverage_cycle_fill(
             got = seed_counts.get(sid, 0)
             if got != req:
                 result["alerts"].append(
-                    f"Day 1: {code[sid]} has {got}, expected {req}."
+                    tr("af.day1", locale, code=code[sid], got=got, req=req)
                 )
 
     # Delete the cells we'll regenerate (auto always; manual only if reset).
@@ -302,8 +317,15 @@ def coverage_cycle_fill(
             if got < req:
                 d = date(year, month, day)
                 result["unmet"].append(
-                    f"{d.isoformat()} {code[sid]}: {got} of {req} "
-                    f"(short {req - got})"
+                    tr(
+                        "af.unmet",
+                        locale,
+                        date=d.isoformat(),
+                        code=code[sid],
+                        got=got,
+                        req=req,
+                        short=req - got,
+                    )
                 )
 
     result["filled_cells"] = filled
@@ -323,6 +345,7 @@ def staggered_cycle_fill(
     department_id: int | None = None,
     auto_stagger: bool = True,
     reset_manual: bool = False,
+    locale: str = DEFAULT_LOCALE,
 ) -> dict:
     result = _empty_result()
     cycle = [s.shift_type_id for s in pattern.steps]
@@ -351,8 +374,12 @@ def staggered_cycle_fill(
         for names in seen.values():
             if len(names) > 1:
                 result["warnings"].append(
-                    f"{len(names)} employees share the same day-1 shift and "
-                    f"will get identical schedules: {', '.join(names)}"
+                    tr(
+                        "af.identical",
+                        locale,
+                        count=len(names),
+                        names=", ".join(names),
+                    )
                 )
 
     filled = 0

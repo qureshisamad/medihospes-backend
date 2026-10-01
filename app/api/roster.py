@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_edit
 from app.core.database import get_db
+from app.core.i18n import get_locale, log_detail, render_log_detail
 from app.models.employee import Employee
 from app.models.roster import RosterAssignment, RosterChangeLog
 from app.models.rotation import RotationPattern
@@ -147,13 +148,13 @@ def upsert_cell(
         cell.is_manual = True
 
     if body.shift_type_id is not None:
-        detail = f"Set {st.code}"
+        detail = log_detail("log.manual_set.shift", code=st.code)
     elif body.absence_code is not None:
-        detail = f"Set {body.absence_code.value}"
+        detail = log_detail("log.manual_set.absence", code=body.absence_code.value)
     elif body.is_pending:
-        detail = "Set pending"
+        detail = log_detail("log.manual_set.pending")
     else:
-        detail = "Set note"
+        detail = log_detail("log.manual_set.note")
     _log(
         db,
         "manual_set",
@@ -189,7 +190,7 @@ def delete_cell(
         _log(
             db,
             "manual_clear",
-            "Cleared cell",
+            log_detail("log.manual_clear"),
             _u.id,
             employee_name=(f"{emp.last_name} {emp.first_name}" if emp else None),
             work_date=work_date,
@@ -243,9 +244,13 @@ def clear_month(
     _log(
         db,
         "clear_month",
-        f"Cleared {count} cells for {year}-{month:02d}"
-        + (f" ({', '.join(scope)})" if scope else "")
-        + (" — absences kept" if keep_absences else ""),
+        log_detail(
+            "log.clear_month",
+            count=count,
+            ym=f"{year}-{month:02d}",
+            scope=", ".join(scope) if scope else None,
+            keep_absences=keep_absences,
+        ),
         user.id,
     )
     db.commit()
@@ -257,6 +262,7 @@ def auto_fill(
     body: AutoFillRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_edit),
+    locale: str = Depends(get_locale),
 ):
     """Auto-fill the month for a category. Manual edits and absences are kept
     as fixed points (pass reset_manual=True to discard manual edits and refill
@@ -280,13 +286,18 @@ def auto_fill(
         auto_stagger=body.auto_stagger,
         reset_manual=body.reset_manual,
         pending_ids=body.pending_employee_ids,
+        locale=locale,
     )
-    mode = "reset (manual edits cleared)" if body.reset_manual else "manual edits kept"
     _log(
         db,
         "auto_fill",
-        f"Auto-fill {pattern.name} {body.year}-{body.month:02d} "
-        f"— {result['filled_cells']} cells, {mode}",
+        log_detail(
+            "log.auto_fill",
+            name=pattern.name,
+            ym=f"{body.year}-{body.month:02d}",
+            cells=result["filled_cells"],
+            reset=body.reset_manual,
+        ),
         user.id,
     )
     db.commit()
@@ -351,7 +362,7 @@ def swap_cells(
     _log(
         db,
         "swap",
-        f"Swapped shifts with {emp_a.last_name} {emp_a.first_name}",
+        log_detail("log.swap", name=f"{emp_a.last_name} {emp_a.first_name}"),
         user.id,
         employee_name=f"{emp_b.last_name} {emp_b.first_name}",
         work_date=body.work_date,
@@ -385,8 +396,11 @@ def cascade(
     _log(
         db,
         "cascade",
-        f"Cascaded {result['updated']} following day(s) from "
-        f"{body.work_date.isoformat()}",
+        log_detail(
+            "log.cascade",
+            count=result["updated"],
+            date=body.work_date.isoformat(),
+        ),
         user.id,
         employee_name=f"{emp.last_name} {emp.first_name}",
         work_date=body.work_date,
@@ -400,14 +414,30 @@ def get_history(
     limit: int = Query(100, le=500),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
+    locale: str = Depends(get_locale),
 ):
-    """Most recent roster changes (manual edits, auto-fills, cascades)."""
-    return (
+    """Most recent roster changes (manual edits, auto-fills, cascades).
+
+    ``detail`` is stored structured and localized to the reader's language
+    here, so switching the UI language reflows the whole history. Rows written
+    before structured logging fall back to their original text."""
+    rows = (
         db.query(RosterChangeLog)
         .order_by(RosterChangeLog.changed_at.desc())
         .limit(limit)
         .all()
     )
+    return [
+        ChangeLogRead(
+            id=r.id,
+            action=r.action,
+            employee_name=r.employee_name,
+            work_date=r.work_date,
+            detail=render_log_detail(r.detail, locale) or "",
+            changed_at=r.changed_at,
+        )
+        for r in rows
+    ]
 
 
 @router.get("/substitutes", response_model=list[SubstituteCandidate])

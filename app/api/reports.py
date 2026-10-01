@@ -20,6 +20,14 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_edit
 from app.core.database import get_db
+from app.core.i18n import (
+    DEFAULT_LOCALE,
+    get_locale,
+    month_abbr,
+    month_name,
+    tr,
+    weekday_initial,
+)
 from app.models.employee import Employee
 from app.models.roster import RosterAssignment
 from app.models.shift_type import ShiftType
@@ -29,9 +37,6 @@ from app.services.hours_service import employee_hours_summary, month_bounds
 
 router = APIRouter(prefix="/reports", tags=["Reports & Export"])
 
-# Weekday initials indexed by date.weekday() (Monday = 0 … Sunday = 6).
-_WEEKDAY = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
-
 
 def _build_grid(
     db: Session,
@@ -40,6 +45,7 @@ def _build_grid(
     department_id: int | None,
     job_title: str | None = None,
     site_id: int | None = None,
+    locale: str = DEFAULT_LOCALE,
 ):
     """Return (employees, days, cell_map) where cell_map[(emp_id, day)] = label."""
     start, end = month_bounds(year, month)
@@ -87,7 +93,7 @@ def _build_grid(
                 label = "B2"  # on loan to another house that day
             elif effective == site_id:
                 if c.is_pending:
-                    label = "Pend"  # benched surplus (not in rotation)
+                    label = tr("rep.pending", locale)  # benched surplus (not in rotation)
                 elif c.shift_type_id:
                     label = shift_codes.get(c.shift_type_id, "?")
                     if emp_home != site_id:
@@ -100,7 +106,7 @@ def _build_grid(
                 continue  # cell belongs to a house we're not exporting
         else:
             if c.is_pending:
-                label = "Pend"
+                label = tr("rep.pending", locale)
             elif c.shift_type_id:
                 label = shift_codes.get(c.shift_type_id, "?")
             elif c.absence_code:
@@ -137,18 +143,19 @@ def export_roster_xlsx(
     site_id: int | None = Query(None),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
+    locale: str = Depends(get_locale),
 ):
     from openpyxl import Workbook
     from openpyxl.comments import Comment
     from openpyxl.styles import Alignment, Font, PatternFill
 
     employees, days, cell_map = _build_grid(
-        db, year, month, department_id, job_title, site_id
+        db, year, month, department_id, job_title, site_id, locale
     )
 
     wb = Workbook()
     ws = wb.active
-    ws.title = f"{calendar.month_abbr[month]} {year}"
+    ws.title = f"{month_abbr(month, locale)} {year}"
 
     header_fill = PatternFill("solid", fgColor="1A7340")
     holiday_fill = PatternFill("solid", fgColor="C0392B")  # Sundays / festività
@@ -158,7 +165,7 @@ def export_roster_xlsx(
     # Two header rows: weekday initial (row 1) over day number (row 2). The
     # "Employee" label spans both. Sundays and festività columns are red.
     ws.merge_cells("A1:A2")
-    lbl = ws.cell(row=1, column=1, value="Employee")
+    lbl = ws.cell(row=1, column=1, value=tr("rep.employee", locale))
     lbl.font = header_font
     lbl.fill = header_fill
     lbl.alignment = Alignment(horizontal="left", vertical="center")
@@ -167,7 +174,7 @@ def export_roster_xlsx(
         dt = date(year, month, d)
         hol = holiday_name(dt)
         fill = holiday_fill if (dt.weekday() == 6 or hol) else header_fill
-        wd_cell = ws.cell(row=1, column=i, value=_WEEKDAY[dt.weekday()])
+        wd_cell = ws.cell(row=1, column=i, value=weekday_initial(dt.weekday(), locale))
         num_cell = ws.cell(row=2, column=i, value=d)
         for c in (wd_cell, num_cell):
             c.font = header_font
@@ -207,6 +214,7 @@ def export_roster_pdf(
     site_id: int | None = Query(None),
     db: Session = Depends(get_db),
     _u: User = Depends(require_edit),
+    locale: str = Depends(get_locale),
 ):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
@@ -222,7 +230,7 @@ def export_roster_pdf(
     from reportlab.lib.styles import getSampleStyleSheet
 
     employees, days, cell_map = _build_grid(
-        db, year, month, department_id, job_title, site_id
+        db, year, month, department_id, job_title, site_id, locale
     )
     styles = getSampleStyleSheet()
 
@@ -237,13 +245,13 @@ def export_roster_pdf(
     # Split the month into column-chunks so nothing is clipped off the page.
     chunks = [days[i : i + days_per_page] for i in range(0, len(days), days_per_page)]
 
-    title = f"Monthly Roster — {calendar.month_name[month]} {year}"
+    title = tr("rep.title", locale, month=month_name(month, locale), year=year)
     story = []
     for ci, chunk in enumerate(chunks):
         if ci > 0:
             story.append(PageBreak())
         sub = (
-            f"{title}   (days {chunk[0]}–{chunk[-1]})"
+            f"{title}   {tr('rep.days_range', locale, start=chunk[0], end=chunk[-1])}"
             if len(chunks) > 1
             else title
         )
@@ -252,8 +260,8 @@ def export_roster_pdf(
 
         # Two header rows: weekday initials over day numbers. The "Employee"
         # cell spans both (via SPAN below).
-        weekday_row = ["Employee"] + [
-            _WEEKDAY[date(year, month, d).weekday()] for d in chunk
+        weekday_row = [tr("rep.employee", locale)] + [
+            weekday_initial(date(year, month, d).weekday(), locale) for d in chunk
         ]
         day_row = [""] + [str(d) for d in chunk]
         rows = [weekday_row, day_row]
@@ -299,7 +307,7 @@ def export_roster_pdf(
         rightMargin=margin,
         topMargin=margin,
         bottomMargin=margin,
-        title=f"Roster {year}-{month:02d}",
+        title=tr("rep.doc_title", locale, ym=f"{year}-{month:02d}"),
     )
     doc.build(story)
     buf.seek(0)

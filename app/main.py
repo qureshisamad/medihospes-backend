@@ -20,6 +20,7 @@ from app.api import (
     users,
 )
 from app.core.config import settings
+from app.core.i18n import register_i18n_handlers
 
 
 class TrailingSlashMiddleware(BaseHTTPMiddleware):
@@ -42,6 +43,9 @@ app = FastAPI(
 )
 
 app.add_middleware(TrailingSlashMiddleware)
+
+# Localize HTTP error details (Accept-Language) — see app/core/i18n.py
+register_i18n_handlers(app)
 
 # CORS — allow the Next.js frontend
 app.add_middleware(
