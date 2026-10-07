@@ -77,6 +77,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "Job title name already exists": "Job title name already exists",
         "Job title not found": "Job title not found",
         "Job title name already in use": "Job title name already in use",
+        "This employee can only be assigned morning shifts.": "This employee can only be assigned morning shifts.",
+        "Shift not allowed": "Shift not allowed for this employee.",
         # --- Auto-fill results ---
         "af.no_active": "No active employees in this category.",
         "af.pending_note": " ({count} pending)",
@@ -116,6 +118,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "rep.title": "Monthly Roster — {month} {year}",
         "rep.days_range": "(days {start}–{end})",
         "rep.doc_title": "Roster {ym}",
+        "rep.coverage": "Coverage",
+        "rep.cov_legend": "Coverage: green = complete, orange = understaffed, red = overstaffed",
     },
     "it": {
         # --- HTTP error details ---
@@ -139,6 +143,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "Job title name already exists": "Nome mansione già esistente",
         "Job title not found": "Mansione non trovata",
         "Job title name already in use": "Nome mansione già in uso",
+        "This employee can only be assigned morning shifts.": "Questo dipendente può essere assegnato solo a turni del mattino.",
+        "Shift not allowed": "Turno non consentito per questo dipendente.",
         # --- Auto-fill results ---
         "af.no_active": "Nessun dipendente attivo in questa categoria.",
         "af.pending_note": " ({count} in attesa)",
@@ -178,6 +184,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "rep.title": "Turni mensili — {month} {year}",
         "rep.days_range": "(giorni {start}–{end})",
         "rep.doc_title": "Turni {ym}",
+        "rep.coverage": "Copertura",
+        "rep.cov_legend": "Copertura: verde = completa, arancione = sotto organico, rosso = sopra organico",
     },
 }
 

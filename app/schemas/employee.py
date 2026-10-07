@@ -19,6 +19,7 @@ class EmployeeBase(BaseModel):
     monthly_hour_limit: float
     flexible_shift: bool = False
     flexible_location: bool = False
+    shift_restriction: str | None = None
 
 
 class EmployeeCreate(EmployeeBase):
@@ -37,6 +38,7 @@ class EmployeeUpdate(BaseModel):
     monthly_hour_limit: float | None = None
     flexible_shift: bool | None = None
     flexible_location: bool | None = None
+    shift_restriction: str | None = None
     is_active: bool | None = None
     coverable_roles: list[str] | None = None
 

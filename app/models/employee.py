@@ -72,6 +72,17 @@ class Employee(Base):
         Boolean, default=False, comment="Rotates between locations weekly"
     )
 
+    # --- Special-employee scheduling restriction ("Dipendenti Speciali") ---
+    # Dynamic/scalable per-employee constraint on which shifts a person may
+    # work. None = no restriction. Currently supported: "morning_only" (e.g. an
+    # educator who only does mornings). Which shifts count as "morning" is
+    # derived from shift-type times, not hard-coded — see app/core/shift_rules.py.
+    shift_restriction: Mapped[Optional[str]] = mapped_column(
+        String(32),
+        nullable=True,
+        comment="e.g. 'morning_only' — limits assignable/substitutable shifts",
+    )
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

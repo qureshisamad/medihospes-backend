@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_edit
 from app.core.database import get_db
 from app.core.i18n import get_locale, log_detail, render_log_detail
+from app.core.shift_rules import block_message, shift_allowed_for
 from app.models.employee import Employee
 from app.models.roster import RosterAssignment, RosterChangeLog
 from app.models.rotation import RotationPattern
@@ -114,6 +115,13 @@ def upsert_cell(
         )
         if not st:
             raise HTTPException(status_code=404, detail="Shift type not found")
+        # Special-employee restriction: block assigning a shift this person may
+        # not work (e.g. a morning-only educator onto an afternoon/night shift).
+        if not shift_allowed_for(emp.shift_restriction, st):
+            raise HTTPException(
+                status_code=400,
+                detail=block_message(emp.shift_restriction) or "Shift not allowed",
+            )
 
     cell = (
         db.query(RosterAssignment)

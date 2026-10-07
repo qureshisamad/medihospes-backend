@@ -6,7 +6,7 @@ of people who appear on the roster (req v2.0 §1.2, §1.4).
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_edit
 from app.core.database import get_db
@@ -34,6 +34,7 @@ def _serialize(emp: Employee) -> EmployeeRead:
         monthly_hour_limit=emp.monthly_hour_limit,
         flexible_shift=emp.flexible_shift,
         flexible_location=emp.flexible_location,
+        shift_restriction=emp.shift_restriction,
         is_active=emp.is_active,
         created_at=emp.created_at,
         coverable_roles=[c.coverable_role for c in emp.coverable_roles],
@@ -55,7 +56,9 @@ def list_employees(
     result also includes operators on loan INTO that house that month (a cell
     with a per-cell ``site_id`` override to this house) so they appear as rows
     in the receiving house's roster grid (objective 3, part 2)."""
-    q = db.query(Employee)
+    # Eager-load coverable_roles so serializing the list is a single extra
+    # query instead of one per employee (avoids an N+1 on the full roster).
+    q = db.query(Employee).options(selectinload(Employee.coverable_roles))
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
     if job_title is not None:

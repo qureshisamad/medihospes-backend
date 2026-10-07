@@ -19,6 +19,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_edit
+from app.core.absences import absence_short
 from app.core.database import get_db
 from app.core.i18n import (
     DEFAULT_LOCALE,
@@ -30,6 +31,7 @@ from app.core.i18n import (
 )
 from app.models.employee import Employee
 from app.models.roster import RosterAssignment
+from app.models.rotation import RotationPattern
 from app.models.shift_type import ShiftType
 from app.models.user import User
 from app.services.holidays import holiday_name
@@ -90,7 +92,7 @@ def _build_grid(
             )
             effective = c.site_id if c.site_id is not None else emp_home
             if transferred_out:
-                label = "B2"  # on loan to another house that day
+                label = absence_short("B2")  # on loan to another house that day
             elif effective == site_id:
                 if c.is_pending:
                     label = tr("rep.pending", locale)  # benched surplus (not in rotation)
@@ -99,7 +101,7 @@ def _build_grid(
                     if emp_home != site_id:
                         label += "*"  # on loan into this house
                 elif c.absence_code:
-                    label = c.absence_code.value
+                    label = absence_short(c.absence_code.value)
                 else:
                     label = ""
             else:
@@ -110,11 +112,109 @@ def _build_grid(
             elif c.shift_type_id:
                 label = shift_codes.get(c.shift_type_id, "?")
             elif c.absence_code:
-                label = c.absence_code.value
+                label = absence_short(c.absence_code.value)
             else:
                 label = ""
         cell_map[(c.employee_id, c.work_date.day)] = label
     return employees, days, cell_map
+
+
+def _coverage_status(
+    db: Session,
+    employees: list[Employee],
+    year: int,
+    month: int,
+    days: list[int],
+    site_id: int | None,
+) -> dict[int, str]:
+    """Per-day coverage status (``ok`` / ``under`` / ``over``) for the exported
+    scope, mirroring the roster screen's green/orange/red rule. Returns an empty
+    dict when no coverage-defining rotation applies (then no color row is drawn).
+
+    A cell counts toward a house on a day when it EFFECTIVELY belongs there
+    (its per-cell site override, else the employee's home house)."""
+    patterns = [
+        p
+        for p in db.query(RotationPattern)
+        .filter(RotationPattern.is_active.is_(True))
+        .all()
+        if p.coverage
+    ]
+    if not patterns:
+        return {}
+
+    emp_home = {e.id: e.site_id for e in employees}
+
+    def pattern_for(e: Employee) -> RotationPattern | None:
+        house = site_id if site_id is not None else e.site_id
+        return next(
+            (p for p in patterns if p.job_title == e.job_title and p.site_id == house),
+            None,
+        ) or next(
+            (p for p in patterns if p.job_title == e.job_title and p.site_id is None),
+            None,
+        )
+
+    chosen: dict[int, RotationPattern] = {}
+    for e in employees:
+        p = pattern_for(e)
+        if p:
+            chosen[p.id] = p
+    if not chosen:
+        return {}
+
+    start, end = month_bounds(year, month)
+    cells = (
+        db.query(RosterAssignment)
+        .filter(
+            RosterAssignment.work_date >= start,
+            RosterAssignment.work_date <= end,
+            RosterAssignment.shift_type_id.isnot(None),
+        )
+        .all()
+    )
+    by_day_emp: dict[tuple[int, int], RosterAssignment] = {
+        (c.employee_id, c.work_date.day): c for c in cells
+    }
+
+    status: dict[int, str] = {}
+    for day in days:
+        over = under = False
+        for pattern in chosen.values():
+            req = {cr.shift_type_id: cr.required_count for cr in pattern.coverage}
+            holders: dict[int, int] = {}
+            for e in employees:
+                c = by_day_emp.get((e.id, day))
+                if c is None or c.shift_type_id is None:
+                    continue
+                sid = c.shift_type_id
+                if sid not in req:
+                    continue
+                if pattern.site_id is None:
+                    pf = pattern_for(e)
+                    belongs = pf is not None and pf.id == pattern.id
+                else:
+                    eff = c.site_id if c.site_id is not None else emp_home.get(e.id)
+                    belongs = eff == pattern.site_id
+                if not belongs:
+                    continue
+                holders[sid] = holders.get(sid, 0) + 1
+            for sid, r in req.items():
+                got = holders.get(sid, 0)
+                if got > r:
+                    over = True
+                if got < r:
+                    under = True
+        status[day] = "over" if over else "under" if under else "ok"
+    return status
+
+
+# Coverage status → (hex color, symbol) for export cells.
+_COV_STYLE = {
+    "ok": ("1A7340", "✓"),
+    "under": ("E67E22", "↓"),
+    "over": ("C0392B", "↑"),
+}
 
 
 @router.get("/overtime")
@@ -192,6 +292,21 @@ def export_roster_xlsx(
             ).alignment = centre
     ws.column_dimensions["A"].width = 28
 
+    # Coverage status row (green = complete, orange = short, red = over),
+    # matching the roster screen's colored footer.
+    cov = _coverage_status(db, employees, year, month, days, site_id)
+    if cov:
+        cov_row = len(employees) + 3
+        lbl_cell = ws.cell(row=cov_row, column=1, value=tr("rep.coverage", locale))
+        lbl_cell.font = Font(bold=True)
+        for i, d in enumerate(days, start=2):
+            st = cov.get(d)
+            color, sym = _COV_STYLE.get(st, ("D9D9D9", ""))
+            cell = ws.cell(row=cov_row, column=i, value=sym)
+            cell.fill = PatternFill("solid", fgColor=color)
+            cell.font = header_font
+            cell.alignment = centre
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -246,6 +361,7 @@ def export_roster_pdf(
     chunks = [days[i : i + days_per_page] for i in range(0, len(days), days_per_page)]
 
     title = tr("rep.title", locale, month=month_name(month, locale), year=year)
+    cov = _coverage_status(db, employees, year, month, days, site_id)
     story = []
     for ci, chunk in enumerate(chunks):
         if ci > 0:
@@ -295,9 +411,42 @@ def export_roster_pdf(
                 style.add(
                     "BACKGROUND", (idx, 0), (idx, 1), colors.HexColor("#C0392B")
                 )
+
+        # Coverage status row (green/orange/red), matching the roster screen.
+        if cov:
+            cov_row_idx = len(rows)
+            rows.append(
+                [tr("rep.coverage", locale)]
+                + [_COV_STYLE.get(cov.get(d), ("", ""))[1] for d in chunk]
+            )
+            style.add("FONTNAME", (0, cov_row_idx), (0, cov_row_idx), "Helvetica-Bold")
+            style.add("LINEABOVE", (0, cov_row_idx), (-1, cov_row_idx), 0.75, colors.grey)
+            for idx, d in enumerate(chunk, start=1):
+                color = _COV_STYLE.get(cov.get(d), ("D9D9D9", ""))[0]
+                style.add(
+                    "BACKGROUND",
+                    (idx, cov_row_idx),
+                    (idx, cov_row_idx),
+                    colors.HexColor("#" + color),
+                )
+                style.add(
+                    "TEXTCOLOR",
+                    (idx, cov_row_idx),
+                    (idx, cov_row_idx),
+                    colors.white,
+                )
+
         table = Table(rows, colWidths=col_widths, repeatRows=2)
         table.setStyle(style)
         story.append(table)
+        if cov:
+            story.append(Spacer(1, 4))
+            story.append(
+                Paragraph(
+                    f'<font size="7" color="#777777">{tr("rep.cov_legend", locale)}</font>',
+                    styles["Normal"],
+                )
+            )
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(

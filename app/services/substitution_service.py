@@ -25,6 +25,7 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
+from app.core.shift_rules import shift_allowed_for
 from app.models.coverage import EmployeeCoverage
 from app.models.employee import Employee
 from app.models.roster import RosterAssignment
@@ -60,13 +61,20 @@ def suggest_substitutes(
     all_shift_types = {s.id: s for s in db.query(ShiftType).all()}
 
     # Hours the prospective shift would add (for overtime projection)
-    added_hours = 0.0
-    if shift_type_id and shift_type_id in all_shift_types:
-        added_hours = all_shift_types[shift_type_id].duration_hours or 0.0
+    gap_shift = all_shift_types.get(shift_type_id) if shift_type_id else None
+    added_hours = gap_shift.duration_hours or 0.0 if gap_shift else 0.0
 
     out: list[dict] = []
     for emp in candidates:
         if exclude_employee_id and emp.id == exclude_employee_id:
+            continue
+
+        # Special-employee restriction: a morning-only educator is only offered
+        # for a morning gap, never for afternoon/night (dynamic, see
+        # shift_rules). Skip only when we know the gap's shift.
+        if gap_shift is not None and not shift_allowed_for(
+            emp.shift_restriction, gap_shift
+        ):
             continue
 
         is_cross_role = False
