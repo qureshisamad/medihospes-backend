@@ -79,6 +79,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "Job title name already in use": "Job title name already in use",
         "This employee can only be assigned morning shifts.": "This employee can only be assigned morning shifts.",
         "Shift not allowed": "Shift not allowed for this employee.",
+        "This employee cannot be scheduled at that site.": "This employee cannot be scheduled at that site.",
         # --- Auto-fill results ---
         "af.no_active": "No active employees in this category.",
         "af.pending_note": " ({count} pending)",
@@ -145,6 +146,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "Job title name already in use": "Nome mansione già in uso",
         "This employee can only be assigned morning shifts.": "Questo dipendente può essere assegnato solo a turni del mattino.",
         "Shift not allowed": "Turno non consentito per questo dipendente.",
+        "This employee cannot be scheduled at that site.": "Questo dipendente non può essere pianificato in quella sede.",
         # --- Auto-fill results ---
         "af.no_active": "Nessun dipendente attivo in questa categoria.",
         "af.pending_note": " ({count} in attesa)",

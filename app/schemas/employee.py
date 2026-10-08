@@ -24,6 +24,7 @@ class EmployeeBase(BaseModel):
 
 class EmployeeCreate(EmployeeBase):
     coverable_roles: list[str] = []
+    excluded_site_ids: list[int] = []
 
 
 class EmployeeUpdate(BaseModel):
@@ -41,6 +42,7 @@ class EmployeeUpdate(BaseModel):
     shift_restriction: str | None = None
     is_active: bool | None = None
     coverable_roles: list[str] | None = None
+    excluded_site_ids: list[int] | None = None
 
 
 class EmployeeRead(EmployeeBase):
@@ -48,5 +50,6 @@ class EmployeeRead(EmployeeBase):
     is_active: bool
     created_at: datetime
     coverable_roles: list[str] = []
+    excluded_site_ids: list[int] = []
 
     model_config = {"from_attributes": True}

@@ -12,6 +12,7 @@ from app.api.deps import require_edit
 from app.core.database import get_db
 from app.models.coverage import EmployeeCoverage
 from app.models.employee import Employee
+from app.models.excluded_site import EmployeeExcludedSite
 from app.models.roster import RosterAssignment
 from app.models.user import User
 from app.schemas.employee import EmployeeCreate, EmployeeRead, EmployeeUpdate
@@ -38,6 +39,7 @@ def _serialize(emp: Employee) -> EmployeeRead:
         is_active=emp.is_active,
         created_at=emp.created_at,
         coverable_roles=[c.coverable_role for c in emp.coverable_roles],
+        excluded_site_ids=[x.site_id for x in emp.excluded_sites],
     )
 
 
@@ -56,9 +58,12 @@ def list_employees(
     result also includes operators on loan INTO that house that month (a cell
     with a per-cell ``site_id`` override to this house) so they appear as rows
     in the receiving house's roster grid (objective 3, part 2)."""
-    # Eager-load coverable_roles so serializing the list is a single extra
-    # query instead of one per employee (avoids an N+1 on the full roster).
-    q = db.query(Employee).options(selectinload(Employee.coverable_roles))
+    # Eager-load the per-employee relationships so serializing the list is a
+    # couple of batched queries instead of one per employee (avoids an N+1).
+    q = db.query(Employee).options(
+        selectinload(Employee.coverable_roles),
+        selectinload(Employee.excluded_sites),
+    )
     if department_id is not None:
         q = q.filter(Employee.department_id == department_id)
     if job_title is not None:
@@ -90,9 +95,13 @@ def create_employee(
 ):
     data = body.model_dump()
     coverable = data.pop("coverable_roles", [])
+    excluded = data.pop("excluded_site_ids", [])
     emp = Employee(**data)
     emp.coverable_roles = [
         EmployeeCoverage(coverable_role=r) for r in coverable
+    ]
+    emp.excluded_sites = [
+        EmployeeExcludedSite(site_id=s) for s in excluded
     ]
     db.add(emp)
     db.commit()
@@ -125,12 +134,18 @@ def update_employee(
 
     data = body.model_dump(exclude_unset=True)
     coverable = data.pop("coverable_roles", None)
+    excluded = data.pop("excluded_site_ids", None)
     for field, value in data.items():
         setattr(emp, field, value)
 
     if coverable is not None:
         emp.coverable_roles = [
             EmployeeCoverage(coverable_role=r) for r in coverable
+        ]
+
+    if excluded is not None:
+        emp.excluded_sites = [
+            EmployeeExcludedSite(site_id=s) for s in excluded
         ]
 
     db.commit()

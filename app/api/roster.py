@@ -122,6 +122,16 @@ def upsert_cell(
                 status_code=400,
                 detail=block_message(emp.shift_restriction) or "Shift not allowed",
             )
+        # Site restriction: block working a shift in a house this person is
+        # excluded from (the house is the per-cell override, else their home).
+        target_site = body.site_id if body.site_id is not None else emp.site_id
+        if target_site is not None and any(
+            x.site_id == target_site for x in emp.excluded_sites
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="This employee cannot be scheduled at that site.",
+            )
 
     cell = (
         db.query(RosterAssignment)

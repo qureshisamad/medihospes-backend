@@ -102,3 +102,8 @@ class Employee(Base):
         back_populates="employee",
         cascade="all, delete-orphan",
     )
+    excluded_sites = relationship(
+        "EmployeeExcludedSite",
+        back_populates="employee",
+        cascade="all, delete-orphan",
+    )

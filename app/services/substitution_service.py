@@ -23,7 +23,7 @@ can weigh it.
 
 from datetime import date
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.shift_rules import shift_allowed_for
 from app.models.coverage import EmployeeCoverage
@@ -56,6 +56,7 @@ def suggest_substitutes(
     candidates = (
         db.query(Employee)
         .filter(Employee.is_active.is_(True))
+        .options(selectinload(Employee.excluded_sites))
         .all()
     )
     all_shift_types = {s.id: s for s in db.query(ShiftType).all()}
@@ -74,6 +75,13 @@ def suggest_substitutes(
         # shift_rules). Skip only when we know the gap's shift.
         if gap_shift is not None and not shift_allowed_for(
             emp.shift_restriction, gap_shift
+        ):
+            continue
+
+        # Site restriction: never offer someone for a gap in a house they are
+        # excluded from.
+        if site_id is not None and any(
+            x.site_id == site_id for x in emp.excluded_sites
         ):
             continue
 
